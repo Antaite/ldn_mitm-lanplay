@@ -159,7 +159,7 @@ namespace ams::mitm::ldn::lanplay {
     Result SetMode(u32 mode) {
         std::scoped_lock lk(g_lock);
         LoadLocked();
-        g_config.mode = mode > LP_MODE_INTERNET ? LP_MODE_LAN : mode;
+        g_config.mode = (mode > static_cast<u32>(LP_MODE_INTERNET)) ? static_cast<u32>(LP_MODE_LAN) : mode;
         R_TRY(WriteConfigFile(std::addressof(g_config)));
         ApplyLocked();
         R_SUCCEED();

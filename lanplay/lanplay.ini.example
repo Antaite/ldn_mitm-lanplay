@@ -1,0 +1,22 @@
+; ldn_mitm-lanplay 設定檔範例
+; 正式設定檔是 /config/ldn_mitm/lanplay.ini，通常用 Tesla 覆蓋層設定即可，不必手動修改。
+; 想手動修改的話：把這個檔案改名成 lanplay.ini，存檔後重新開機（或在覆蓋層按「重新連線」）。
+
+[general]
+; off = 關閉（遊戲用原本的本機無線通訊）
+; lan = 同區網（同一個 Wi-Fi 底下的 Switch）
+; internet = 網際網路（連到 lan-play 伺服器）
+mode=internet
+; 目前使用第幾台伺服器（從 0 開始算）
+server=0
+; 虛擬 IP（10.13.x.y），留空會自動產生；同一台伺服器上不能有兩台主機用同一個 IP
+ip=
+; lan-play 封包分段大小，0 = 不分段（一般不用改；遇到大封包被丟可以試 1300）
+pmtu=0
+
+[server0]
+name=我的伺服器
+host=example.com
+port=11451
+user=
+pass=

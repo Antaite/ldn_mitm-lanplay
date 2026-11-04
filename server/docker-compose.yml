@@ -1,0 +1,15 @@
+# 自架 lan-play 中繼伺服器（官方 switch-lan-play 伺服器映像檔）
+# 用法：在 NAS / 電腦上執行 `docker compose up -d`
+# 路由器要把 UDP 與 TCP 11451 轉發到這台機器。
+services:
+  lan-play:
+    image: spacemeowx2/switch-lan-play:latest
+    container_name: lan-play
+    restart: unless-stopped
+    ports:
+      - "11451:11451/udp"   # 對戰封包
+      - "11451:11451/tcp"   # 在線人數查詢 (/info)
+    # 想加帳號密碼：建立 users.json（格式 {"帳號":"密碼"}），取消下面註解
+    # volumes:
+    #   - ./users.json:/app/users.json:ro
+    # command: ["node", "dist/main.js", "--jsonAuth", "/app/users.json"]

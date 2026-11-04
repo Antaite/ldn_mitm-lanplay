@@ -1,0 +1,11 @@
+# 在本機用 devkitPro 容器編譯（需要 Docker）
+#   AMS=1.12.1 docker compose run --rm devkit
+services:
+  devkit:
+    image: devkitpro/devkita64:latest
+    volumes:
+      - ".:/code"
+    working_dir: /code
+    environment:
+      - AMS=${AMS:-1.12.1}
+    command: bash -c "git config --global --add safe.directory /code && tools/fetch_ams_libs.sh $$AMS && make -j8"

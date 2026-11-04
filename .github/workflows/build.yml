@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: AMS ${{ matrix.ams }} / FW ${{ matrix.fw }}
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { ams: "1.12.0", fw: "23.0.0" }
+          - { ams: "1.12.1", fw: "23.0.1" }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch Atmosphère ${{ matrix.ams }} libraries
+        run: tools/fetch_ams_libs.sh "${{ matrix.ams }}"
+
+      - name: Install latest libnx
+        run: |
+          pushd /tmp
+          git clone --depth 1 https://github.com/switchbrew/libnx
+          make -C libnx -j"$(nproc)"
+          make -C libnx install
+          popd
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Name package
+        run: echo "PKG=ldn_mitm-lanplay_v$(cat VERSION)_AMS${{ matrix.ams }}_FW${{ matrix.fw }}" >> "$GITHUB_ENV"
+
+      - name: Upload SD card files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: out/sd
+
+      - name: Upload debug ELFs
+        uses: actions/upload-artifact@v4
+        with:
+          name: elf_AMS${{ matrix.ams }}
+          path: |
+            ldn_mitm/ldn_mitm.elf
+            overlay/overlay.elf
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ldn_mitm-lanplay_*
+          path: dist
+
+      - name: Zip packages
+        run: |
+          cd dist
+          for d in */; do (cd "$d" && zip -qr "../${d%/}.zip" .); done
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

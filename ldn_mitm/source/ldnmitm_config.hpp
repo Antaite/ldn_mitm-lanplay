@@ -28,6 +28,7 @@ namespace ams::mitm::ldn {
             Result ReloadLanPlayConfig();
             Result GetMode(sf::Out<u32> mode);
             Result SetMode(u32 mode);
+            Result ScanRooms(sf::Out<u32> count, const sf::OutBuffer &rooms);
     };
     static_assert(ams::mitm::ldn::IsILdnConfig<LdnConfig>);
 

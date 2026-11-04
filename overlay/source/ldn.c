@@ -68,3 +68,10 @@ Result ldnMitmGetMode(LdnMitmConfigService *s, u32 *mode) {
 Result ldnMitmSetMode(LdnMitmConfigService *s, u32 mode) {
     return serviceDispatchIn(&s->s, 65103, mode);
 }
+
+Result ldnMitmScanRooms(LdnMitmConfigService *s, void *rooms, size_t rooms_size, u32 *count) {
+    return serviceDispatchOut(&s->s, 65104, *count,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
+        .buffers = { { rooms, rooms_size } },
+    );
+}

@@ -1,6 +1,7 @@
 #include <cstring>
 #include "ldnmitm_config.hpp"
 #include "lanplay_service.hpp"
+#include "room_scan.hpp"
 #include "debug.hpp"
 
 namespace ams::mitm::ldn {
@@ -49,5 +50,12 @@ namespace ams::mitm::ldn {
     }
     Result LdnConfig::SetMode(u32 mode) {
         return lanplay::SetMode(mode);
+    }
+    Result LdnConfig::ScanRooms(sf::Out<u32> count, const sf::OutBuffer &rooms) {
+        const size_t max = std::min<size_t>(rooms.GetSize() / sizeof(lp_room_t), LP_ROOM_MAX);
+        u32 n = 0;
+        Result rc = rooms::Scan(reinterpret_cast<lp_room_t *>(rooms.GetPointer()), max, std::addressof(n));
+        count.SetValue(n);
+        return rc;
     }
 }

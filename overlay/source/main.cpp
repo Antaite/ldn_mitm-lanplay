@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <sys/stat.h>
 #include "ldn.h"
 
@@ -36,6 +37,14 @@ namespace {
     lp_config_t          g_cfg;
     std::string          g_toast;
     u64                  g_toastUntil = 0;
+
+    /* Room browser */
+    lp_room_t            g_rooms[LP_ROOM_MAX];
+    u32                  g_roomCount = 0;
+    Result               g_roomResult = 0;
+    bool                 g_roomScanRequested = false;
+    bool                 g_nsOk = false;
+    std::unordered_map<u64, std::string> g_gameNames;
 
     /* Deferred navigation: tsl::goBack() is only called from Gui::update(),
      * never from inside a click handler of the Gui being destroyed. */
@@ -140,6 +149,37 @@ namespace {
         char s[16];
         lp_ip_to_str(ip, s);
         return s;
+    }
+
+    std::string GameName(u64 id) {
+        auto it = g_gameNames.find(id);
+        if (it != g_gameNames.end()) {
+            return it->second;
+        }
+        std::string name;
+        if (g_nsOk) {
+            static NsApplicationControlData *data = new NsApplicationControlData;
+            u64 size = 0;
+            if (R_SUCCEEDED(nsGetApplicationControlData(NsApplicationControlSource_Storage, id, data, sizeof(*data), &size)) && size >= sizeof(data->nacp)) {
+                NacpLanguageEntry *lang = nullptr;
+                if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &lang)) && lang != nullptr && lang->name[0]) {
+                    name = lang->name;
+                }
+            }
+        }
+        if (name.empty()) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "未安裝的遊戲 %016lX", static_cast<unsigned long>(id));
+            name = buf;
+        }
+        g_gameNames[id] = name;
+        return name;
+    }
+
+    void DoRoomScan() {
+        g_roomCount = 0;
+        g_roomResult = ldnMitmScanRooms(&g_ldnConfig, g_rooms, sizeof(g_rooms), &g_roomCount);
+        if (g_roomCount > LP_ROOM_MAX) g_roomCount = LP_ROOM_MAX;
     }
 
     std::string Dots(const std::string &s) {
@@ -500,6 +540,82 @@ namespace {
         }
     };
 
+
+    /* ------------------------------------------------------------ room list */
+
+    class RoomListGui : public tsl::Gui {
+    public:
+        tsl::elm::Element *createUI() override {
+            const lp_server_t *srv = lp_config_current(&g_cfg);
+            std::string sub = g_cfg.mode == LP_MODE_INTERNET ? std::string("伺服器：") + (srv ? srv->name : "未設定") : std::string("同區網");
+            sub += "　\uE0E3 重新搜尋";
+            auto frame = new tsl::elm::OverlayFrame("房間列表", sub);
+            auto list = new tsl::elm::List();
+
+            if (R_FAILED(g_roomResult)) {
+                const u32 desc = R_DESCRIPTION(g_roomResult);
+                const char *msg = desc == 93 ? "對戰模式是「關閉」，\n請先切到同區網或網際網路。"
+                                : desc == 92 ? "還沒連上伺服器。\n等狀態變成「已連線」再搜尋。"
+                                : "搜尋失敗，請稍後再試。";
+                list->addItem(new tsl::elm::CustomDrawer([msg](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                    r->drawString(msg, false, x + 5, y + 30, 19, r->a(tsl::style::color::ColorText));
+                }), 90);
+            } else if (g_roomCount == 0) {
+                list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                    r->drawString("目前沒有人開房。", false, x + 5, y + 30, 20, r->a(tsl::style::color::ColorText));
+                    r->drawString("只會列出「正在等人加入」的房間；\n已經開打的房間不會出現。\n按 \uE0E3 重新搜尋。", false, x + 5, y + 62, 15, r->a(tsl::style::color::ColorDescription));
+                }), 130);
+            } else {
+                char head[48];
+                snprintf(head, sizeof(head), "找到 %u 個房間", static_cast<unsigned>(g_roomCount));
+                list->addItem(new tsl::elm::CategoryHeader(head));
+                for (u32 i = 0; i < g_roomCount; i++) {
+                    const lp_room_t room = g_rooms[i];
+                    char cnt[24];
+                    snprintf(cnt, sizeof(cnt), "%u/%u 人%s", room.node_count, room.node_max, "");
+                    auto item = new tsl::elm::ListItem(GameName(room.local_comm_id), cnt);
+                    list->addItem(item);
+
+                    std::string host = std::string("房主：") + (room.players[0][0] ? room.players[0] : "?");
+                    std::string members;
+                    for (int p = 1; p < LP_ROOM_PLAYERS; p++) {
+                        if (!room.players[p][0]) continue;
+                        if (!members.empty()) members += "、";
+                        members += room.players[p];
+                    }
+                    std::string ipline = "IP " + Ip(room.host_ip);
+                    list->addItem(new tsl::elm::CustomDrawer([host, members, ipline](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
+                        r->drawString(host.c_str(), false, x + 20, y + 20, 16, r->a(tsl::style::color::ColorText), w - 30);
+                        if (!members.empty()) {
+                            std::string m = "成員：" + members;
+                            r->drawString(m.c_str(), false, x + 20, y + 42, 15, r->a(tsl::style::color::ColorDescription), w - 30);
+                        }
+                        r->drawString(ipline.c_str(), false, x + 20, y + (members.empty() ? 42 : 62), 12, r->a(tsl::style::color::ColorDescription));
+                    }), members.empty() ? 52 : 72);
+                }
+                list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                    r->drawString("在遊戲裡進入本地通訊畫面搜尋，就能加入這些房間。", false, x + 5, y + 25, 14, r->a(tsl::style::color::ColorDescription));
+                }), 40);
+            }
+
+            frame->setContent(list);
+            return frame;
+        }
+
+        void update() override {
+            ProcessPendingNav();
+        }
+
+        bool handleInput(u64 down, u64, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
+            if (down & HidNpadButton_Y) {
+                g_roomScanRequested = true;   /* MainGui scans again and re-opens this screen */
+                g_pendingBack++;
+                return true;
+            }
+            return false;
+        }
+    };
+
     /* ----------------------------------------------------------------- main */
 
     class MainGui : public tsl::Gui {
@@ -551,6 +667,17 @@ namespace {
                 });
                 list->addItem(m_itServer);
 
+            }
+
+            if (g_lanplayOk) {
+                auto rooms = new tsl::elm::ListItem("房間列表", "看誰正在開房");
+                rooms->setClickListener([](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    g_roomScanRequested = true;
+                    return true;
+                });
+                list->addItem(rooms);
+
                 auto reconnect = new tsl::elm::ListItem("重新連線");
                 reconnect->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
@@ -576,6 +703,20 @@ namespace {
 
         void update() override {
             if (ProcessPendingNav()) return;
+            if (g_roomScanRequested) {
+                /* draw one frame with the "searching" toast first, then scan (blocks ~1.5 s) */
+                if (!m_scanToastShown) {
+                    Toast("正在搜尋房間…");
+                    m_scanToastShown = true;
+                    return;
+                }
+                m_scanToastShown = false;
+                g_roomScanRequested = false;
+                DoRoomScan();
+                g_toastUntil = 0;
+                tsl::changeTo<RoomListGui>();
+                return;
+            }
             if (m_tick++ % 15 == 0) {   /* ~4 times per second */
                 RefreshStatus();
                 if (m_itMode) m_itMode->setValue(ModeText(g_cfg.mode));
@@ -647,6 +788,7 @@ namespace {
         tsl::elm::ListItem *m_itMode = nullptr;
         tsl::elm::ListItem *m_itServer = nullptr;
         u32 m_tick = 0;
+        bool m_scanToastShown = false;
     };
 
 }
@@ -661,6 +803,7 @@ public:
         LoadConfig();
 
         tsl::hlp::doWithSmSession([] {
+            g_nsOk = R_SUCCEEDED(nsInitialize());
             if (R_FAILED(smGetService(&g_ldnSrv, "ldn:u"))) return;
             if (R_FAILED(ldnMitmGetConfigFromService(&g_ldnSrv, &g_ldnConfig))) return;
             g_serviceOk = true;
@@ -674,6 +817,7 @@ public:
     void exitServices() override {
         if (g_serviceOk) serviceClose(&g_ldnConfig.s);
         serviceClose(&g_ldnSrv);
+        if (g_nsOk) nsExit();
         fsdevUnmountDevice("sdmc");
     }
 

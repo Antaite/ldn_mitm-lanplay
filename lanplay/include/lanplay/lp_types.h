@@ -78,6 +78,22 @@ typedef struct {
     uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8];
 } lp_status_t;
 
+/* One open room found by a scan (host in "create room" state). 0x120 bytes. */
+#define LP_ROOM_MAX         16
+#define LP_ROOM_PLAYERS     8
+typedef struct {
+    uint64_t local_comm_id;    /* usually the game's application (title) ID */
+    uint32_t host_ip;          /* host order */
+    uint16_t scene_id;
+    int16_t  comm_version;     /* host's localCommunicationVersion */
+    uint8_t  node_count;
+    uint8_t  node_max;
+    uint8_t  has_password;
+    uint8_t  _pad;
+    char     players[LP_ROOM_PLAYERS][33];   /* players[0] = host */
+    uint8_t  _reserved[0x120 - 20 - LP_ROOM_PLAYERS * 33];
+} lp_room_t;
+
 #ifdef __cplusplus
 }
 #endif

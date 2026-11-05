@@ -53,6 +53,8 @@ jobs:
         with:
           name: ${{ env.PKG }}
           path: out/sd
+          # switch/.overlays is a hidden folder; upload-artifact v4 skips those by default
+          include-hidden-files: true
 
       - name: Upload debug ELFs
         uses: actions/upload-artifact@v4
@@ -84,6 +86,8 @@ jobs:
           cd dist
           for d in */; do (cd "$d" && zip -qr "../${d%/}.zip" .); done
           ls -la
+          # fail loudly if the overlay ever goes missing again
+          for z in *.zip; do unzip -l "$z" | grep -q 'switch/.overlays/ldnmitm_config.ovl' || { echo "overlay missing in $z"; exit 1; }; done
 
       - uses: softprops/action-gh-release@v2
         with:

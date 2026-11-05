@@ -40,6 +40,7 @@ typedef struct {
     int32_t     count;
     uint32_t    virt_ip;       /* host order, 0 = generate */
     uint32_t    pmtu;          /* 0 = no lan-play fragmentation */
+    int32_t     preset;        /* index into lp_presets, -1 = use servers[current] */
     lp_server_t servers[LP_MAX_SERVERS];
 } lp_config_t;
 
@@ -77,6 +78,20 @@ typedef struct {
     char     version[32];
     uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8];
 } lp_status_t;
+
+/* Server probe (overlay server list). */
+#define LP_PROBE_MAX        48
+typedef struct {
+    char     host[128];
+    uint16_t port;
+    uint16_t _pad[3];
+} lp_probe_target_t;              /* 0x88 bytes */
+
+enum { LP_PROBE_OK = 0, LP_PROBE_DNS_FAILED = 1, LP_PROBE_NO_RESPONSE = 2 };
+typedef struct {
+    int32_t  status;               /* LP_PROBE_* */
+    int32_t  ping_ms;              /* -1 unless OK */
+} lp_probe_result_t;
 
 /* One open room found by a scan (host in "create room" state). 0x120 bytes. */
 #define LP_ROOM_MAX         16

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "lanplay/lp_config.h"
+#include "lanplay/lp_presets.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@ void lp_config_default(lp_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->mode = LP_MODE_LAN;
     cfg->current = -1;
+    cfg->preset = -1;
 }
 
 const char *lp_mode_name(uint32_t mode) {
@@ -59,6 +61,15 @@ uint32_t lp_generate_virtual_ip(const uint8_t r[2]) {
 }
 
 const lp_server_t *lp_config_current(const lp_config_t *cfg) {
+    static lp_server_t preset_srv;
+    if (cfg->preset >= 0 && cfg->preset < lp_preset_count) {
+        const lp_preset_t *p = &lp_presets[cfg->preset];
+        memset(&preset_srv, 0, sizeof(preset_srv));
+        snprintf(preset_srv.name, sizeof(preset_srv.name), "%s", p->name);
+        snprintf(preset_srv.host, sizeof(preset_srv.host), "%s", p->host);
+        preset_srv.port = p->port;
+        return &preset_srv;
+    }
     if (cfg->current < 0 || cfg->current >= cfg->count) return NULL;
     return &cfg->servers[cfg->current];
 }
@@ -141,6 +152,11 @@ void lp_config_parse(lp_config_t *cfg, const char *buf, size_t len) {
             if (!strcmp(key, "mode")) cfg->mode = parse_mode(val);
             else if (!strcmp(key, "server")) current_from_file = atoi(val);
             else if (!strcmp(key, "ip")) { uint32_t ip; if (!lp_str_to_ip(val, &ip) && lp_ip_is_valid_virtual(ip)) cfg->virt_ip = ip; }
+            else if (!strcmp(key, "preset")) {
+                /* stored as host:port so the list can change between versions */
+                char *colon = strrchr(val, ':');
+                if (colon) { *colon = 0; cfg->preset = lp_preset_find(val, (uint16_t)atoi(colon + 1)); }
+            }
             else if (!strcmp(key, "pmtu")) { int v = atoi(val); cfg->pmtu = (v >= 500 && v <= 1500) ? (uint32_t)v : 0; }
         } else if (section >= 0) {
             lp_server_t *s = &cfg->servers[section];
@@ -183,6 +199,11 @@ size_t lp_config_format(const lp_config_t *cfg, char *buf, size_t cap) {
     APPEND("; ldn_mitm-lanplay 設定檔（Tesla 覆蓋層會自動改寫）\n");
     APPEND("; mode = off（關閉）/ lan（同區網）/ internet（網際網路 lan-play）\n");
     APPEND("[general]\nmode=%s\nserver=%d\nip=%s\npmtu=%u\n", lp_mode_name(cfg->mode), cfg->current, ip, (unsigned)cfg->pmtu);
+    if (cfg->preset >= 0 && cfg->preset < lp_preset_count) {
+        APPEND("; 使用內建伺服器（優先於 server=）\npreset=%s:%u\n", lp_presets[cfg->preset].host, (unsigned)lp_presets[cfg->preset].port);
+    } else {
+        APPEND("preset=\n");
+    }
     for (int i = 0; i < cfg->count; i++) {
         const lp_server_t *s = &cfg->servers[i];
         APPEND("\n[server%d]\nname=%s\nhost=%s\nport=%u\nuser=%s\npass=%s\n", i, s->name, s->host, (unsigned)s->port, s->user, s->pass);

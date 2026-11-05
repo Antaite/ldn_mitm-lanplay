@@ -25,6 +25,7 @@ namespace ams::mitm::ldn {
     AMS_SF_METHOD_INFO(C, H, 65101, Result, ReloadLanPlayConfig, (),                                                     ())       \
     AMS_SF_METHOD_INFO(C, H, 65102, Result, GetMode,             (ams::sf::Out<u32> mode),                               (mode))   \
     AMS_SF_METHOD_INFO(C, H, 65103, Result, SetMode,             (u32 mode),                                             (mode))   \
-    AMS_SF_METHOD_INFO(C, H, 65104, Result, ScanRooms,           (ams::sf::Out<u32> count, const ams::sf::OutBuffer &rooms), (count, rooms))
+    AMS_SF_METHOD_INFO(C, H, 65104, Result, ScanRooms,           (ams::sf::Out<u32> count, const ams::sf::OutBuffer &rooms), (count, rooms)) \
+    AMS_SF_METHOD_INFO(C, H, 65105, Result, ProbeServers,        (const ams::sf::InBuffer &targets, const ams::sf::OutBuffer &results), (targets, results))
 
     AMS_SF_DEFINE_INTERFACE(ams::mitm::ldn, ILdnConfig, AMS_LDN_CONFIG, 0x14c8af2c)

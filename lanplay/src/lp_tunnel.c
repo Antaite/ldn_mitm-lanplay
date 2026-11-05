@@ -18,6 +18,7 @@
 #include "lanplay/lp_platform.h"
 #include "lanplay/lp_sha1.h"
 #include "lanplay/lp_config.h"
+#include "lanplay/lp_dns.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -255,20 +256,10 @@ static void on_packet(const uint8_t *b, size_t n) {
 
 static int dns_query(uint32_t dns_ip, const char *host, uint32_t *out) {
     uint8_t q[300], r[512];
-    size_t hl = strlen(host), pos = 12;
-    if (hl == 0 || hl > 250) return -1;
     uint8_t rnd[2]; lp_random(rnd, 2);
-    memset(q, 0, 12);
-    q[0] = rnd[0]; q[1] = rnd[1]; q[2] = 0x01; /* RD */ q[5] = 1; /* QDCOUNT */
-    const char *s = host;
-    while (*s) {
-        const char *dot = strchr(s, '.');
-        size_t l = dot ? (size_t)(dot - s) : strlen(s);
-        if (l == 0 || l > 63) return -1;
-        q[pos++] = (uint8_t)l; memcpy(q + pos, s, l); pos += l;
-        s += l; if (*s == '.') s++;
-    }
-    q[pos++] = 0; q[pos++] = 0; q[pos++] = 1; q[pos++] = 0; q[pos++] = 1;   /* A, IN */
+    const uint16_t qid = (uint16_t)(rnd[0] << 8 | rnd[1]);
+    size_t qlen = lp_dns_build(host, qid, q, sizeof q);
+    if (qlen == 0) return -1;
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
@@ -276,25 +267,12 @@ static int dns_query(uint32_t dns_ip, const char *host, uint32_t *out) {
     SET_SIN_LEN(a);
     int ok = -1;
     for (int attempt = 0; attempt < 2 && ok != 0 && T.running; attempt++) {
-        if (sendto(fd, q, pos, 0, (struct sockaddr *)&a, sizeof a) < 0) break;
+        if (sendto(fd, q, qlen, 0, (struct sockaddr *)&a, sizeof a) < 0) break;
         struct pollfd pf = { .fd = fd, .events = POLLIN };
         if (poll(&pf, 1, 1500) <= 0) continue;
         ssize_t n = recv(fd, r, sizeof r, 0);
-        if (n < 12 || r[0] != q[0] || r[1] != q[1] || (r[3] & 0x0F) != 0) continue;
-        size_t an = (size_t)(r[6] << 8 | r[7]), i = pos;          /* skip echoed question */
-        if (i > (size_t)n) continue;
-        for (size_t k = 0; k < an && i + 12 <= (size_t)n; k++) {
-            if ((r[i] & 0xC0) == 0xC0) i += 2;
-            else { while (i < (size_t)n && r[i]) i += r[i] + 1; i++; }
-            if (i + 10 > (size_t)n) break;
-            uint16_t type = (uint16_t)(r[i] << 8 | r[i + 1]), rdl = (uint16_t)(r[i + 8] << 8 | r[i + 9]);
-            i += 10;
-            if (type == 1 && rdl == 4 && i + 4 <= (size_t)n) {
-                *out = (uint32_t)r[i] << 24 | (uint32_t)r[i+1] << 16 | (uint32_t)r[i+2] << 8 | r[i+3];
-                ok = 0; break;
-            }
-            i += rdl;
-        }
+        uint16_t rid; uint32_t ip;
+        if (n > 0 && lp_dns_parse(r, (size_t)n, &rid, &ip) == 0 && rid == qid) { *out = ip; ok = 0; }
     }
     close(fd);
     return ok;

@@ -2,7 +2,7 @@
 LWIP    := ../../third_party/lwip
 LWIPDIR := $(LWIP)/src
 include $(LWIPDIR)/Filelists.mk
-SRC := $(COREFILES) $(CORE4FILES) $(APIFILES) $(LWIP)/contrib/unix-port/sys_arch.c \
+SRC := $(COREFILES) $(CORE4FILES) $(APIFILES) $(LWIP)/contrib/unix-port/sys_arch.c ../src/lp_dns.c ../src/lp_probe.c ../src/lp_presets.c \
        ../src/vnet.c ../src/lp_tunnel.c ../src/lp_config.c ../src/lp_sha1.c ../port/host/lp_platform_host.c lpclient.c
 CFLAGS := -O1 -g -Wall -Wno-address -I../include -I$(LWIPDIR)/include -I$(LWIP)/contrib/unix-port/include -pthread
 lpclient: $(SRC)

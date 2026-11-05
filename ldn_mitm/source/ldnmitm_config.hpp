@@ -29,6 +29,7 @@ namespace ams::mitm::ldn {
             Result GetMode(sf::Out<u32> mode);
             Result SetMode(u32 mode);
             Result ScanRooms(sf::Out<u32> count, const sf::OutBuffer &rooms);
+            Result ProbeServers(const sf::InBuffer &targets, const sf::OutBuffer &results);
     };
     static_assert(ams::mitm::ldn::IsILdnConfig<LdnConfig>);
 

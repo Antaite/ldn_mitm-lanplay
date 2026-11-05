@@ -7,6 +7,8 @@
 #include "lanplay/lp_config.h"
 #include "lanplay/lp_platform.h"
 #include "lanplay/vnet.h"
+#include "lanplay/lp_probe.h"
+#include "lanplay/lp_dns.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,22 @@ static void wait_connected(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && !strcmp(argv[1], "probe")) {
+        /* lpclient probe dnsport host:port ... */
+        lp_probe_set_dns(0x7F000001, (uint16_t)atoi(argv[2]));
+        lp_probe_target_t t[LP_PROBE_MAX]; lp_probe_result_t r[LP_PROBE_MAX];
+        int n = 0;
+        for (int i = 3; i < argc && n < LP_PROBE_MAX; i++, n++) {
+            memset(&t[n], 0, sizeof t[n]);
+            char *c = strrchr(argv[i], ':'); *c = 0;
+            snprintf(t[n].host, sizeof t[n].host, "%s", argv[i]); t[n].port = (uint16_t)atoi(c + 1);
+        }
+        uint64_t t0 = lp_now_ms();
+        lp_probe(t, n, r);
+        for (int i = 0; i < n; i++) printf("%-24s %u status=%d ping=%d\n", t[i].host, t[i].port, r[i].status, r[i].ping_ms);
+        printf("took %llu ms\n", (unsigned long long)(lp_now_ms() - t0));
+        return 0;
+    }
     if (argc < 4) { fprintf(stderr, "usage: %s host|join server ip [user pass]\n", argv[0]); return 1; }
     srand((unsigned)lp_now_ms());
     uint32_t ip; lp_str_to_ip(argv[3], &ip);

@@ -20,6 +20,7 @@ Result ldnMitmGetLanPlayStatus(LdnMitmConfigService *s, void *out_status_0x100);
 Result ldnMitmReloadLanPlayConfig(LdnMitmConfigService *s);
 Result ldnMitmGetMode(LdnMitmConfigService *s, u32 *mode);
 Result ldnMitmSetMode(LdnMitmConfigService *s, u32 mode);
+Result ldnMitmProbeServers(LdnMitmConfigService *s, const void *targets, size_t targets_size, void *results, size_t results_size);
 Result ldnMitmScanRooms(LdnMitmConfigService *s, void *rooms, size_t rooms_size, u32 *count);
 Result ldnMitmGetConfig(LdnMitmConfigService *out);
 Result ldnMitmGetConfigFromService(Service* s, LdnMitmConfigService *out);

@@ -75,3 +75,10 @@ Result ldnMitmScanRooms(LdnMitmConfigService *s, void *rooms, size_t rooms_size,
         .buffers = { { rooms, rooms_size } },
     );
 }
+
+Result ldnMitmProbeServers(LdnMitmConfigService *s, const void *targets, size_t targets_size, void *results, size_t results_size) {
+    return serviceDispatch(&s->s, 65105,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In, SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
+        .buffers = { { targets, targets_size }, { results, results_size } },
+    );
+}

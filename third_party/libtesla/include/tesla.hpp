@@ -534,6 +534,14 @@ namespace tsl {
              * @param h Height
              */
             inline void enableScissoring(s32 x, s32 y, s32 w, s32 h) {
+                /* ldn_mitm-lanplay: nested scissors intersect with the enclosing one, so a
+                 * CustomDrawer inside a scrolled List cannot draw over the frame header. */
+                if (!this->m_scissoringStack.empty()) {
+                    const auto &t = this->m_scissoringStack.top();
+                    const s32 x1 = std::max(x, t.x), y1 = std::max(y, t.y);
+                    const s32 x2 = std::min(x + w, t.x + t.w), y2 = std::min(y + h, t.y + t.h);
+                    x = x1; y = y1; w = std::max<s32>(0, x2 - x1); h = std::max<s32>(0, y2 - y1);
+                }
                 this->m_scissoringStack.emplace(x, y, w, h);
             }
 

@@ -23,7 +23,6 @@ const lp_preset_t lp_presets[] = {
     { "ix.tc",              "中國", "ns.ix.tc",                    11451, "" },
     { "asypost",            "中國", "asypost.kmdns.net",           11452, "" },
     { "nplay.asia",         "越南", "switch-la.nplay.asia",        11451, "" },
-    { "mainbareng",         "印尼", "switch.mainbareng.web.id",    11451, "" },
     { "0mn1b0x",            "澳洲", "switch.0mn1b0x.com",          11453, "" },
     { "lan-play.com",       "法國", "switch.lan-play.com",         11451, "" },
     { "frog-skins",         "美國", "frog-skins.com",              11451, "" },

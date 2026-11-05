@@ -13,7 +13,7 @@ LWIPDIR  := ../third_party/lwip/src
 include $(LWIPDIR)/Filelists.mk
 
 SRCS := $(COREFILES) $(CORE4FILES) $(APIFILES) \
-        src/vnet.c src/lp_tunnel.c src/lp_config.c src/lp_sha1.c src/lp_dns.c src/lp_probe.c src/lp_presets.c
+        src/vnet.c src/lp_tunnel.c src/lp_config.c src/lp_sha1.c src/lp_dns.c src/lp_probe.c
 
 BUILD := build
 OBJS  := $(addprefix $(BUILD)/,$(subst /,_,$(subst ../,,$(SRCS:.c=.o))))

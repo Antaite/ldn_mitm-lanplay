@@ -40,7 +40,6 @@ typedef struct {
     int32_t     count;
     uint32_t    virt_ip;       /* host order, 0 = generate */
     uint32_t    pmtu;          /* 0 = no lan-play fragmentation */
-    int32_t     preset;        /* index into lp_presets, -1 = use servers[current] */
     lp_server_t servers[LP_MAX_SERVERS];
 } lp_config_t;
 

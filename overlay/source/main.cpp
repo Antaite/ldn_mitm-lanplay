@@ -23,7 +23,6 @@
 
 extern "C" {
 #include "lanplay/lp_config.h"
-#include "lanplay/lp_presets.h"
 }
 
 namespace {
@@ -40,7 +39,7 @@ namespace {
     std::string          g_toast;
     u64                  g_toastUntil = 0;
 
-    /* Server probe: [0, count) user servers, [count, count+presets) built-ins */
+    /* Server probe results, one per saved server */
     lp_probe_result_t    g_probe[LP_PROBE_MAX];
     int                  g_probeCount = 0;
     bool                 g_probeValid = false;
@@ -191,11 +190,6 @@ namespace {
             memset(&t[n], 0, sizeof(t[n]));
             snprintf(t[n].host, sizeof(t[n].host), "%s", g_cfg.servers[i].host);
             t[n].port = g_cfg.servers[i].port;
-        }
-        for (int i = 0; i < lp_preset_count && n < LP_PROBE_MAX; i++, n++) {
-            memset(&t[n], 0, sizeof(t[n]));
-            snprintf(t[n].host, sizeof(t[n].host), "%s", lp_presets[i].host);
-            t[n].port = lp_presets[i].port;
         }
         g_probeCount = n;
         g_probeValid = g_lanplayOk && R_SUCCEEDED(ldnMitmProbeServers(&g_ldnConfig, t, sizeof(t[0]) * n, g_probe, sizeof(g_probe[0]) * n));
@@ -506,7 +500,6 @@ namespace {
                 }
                 g_cfg.current = idx;
             }
-            g_cfg.preset = -1;
             g_cfg.mode = LP_MODE_INTERNET;   /* picking a server means playing online */
             Apply();
             g_pendingBack += 2;              /* edit -> list -> main */
@@ -530,7 +523,7 @@ namespace {
             list->addItem(new tsl::elm::CategoryHeader("我的伺服器"));
             for (int i = 0; i < g_cfg.count; i++) {
                 const lp_server_t &s = g_cfg.servers[i];
-                const bool inUse = g_cfg.preset < 0 && i == g_cfg.current;
+                const bool inUse = i == g_cfg.current;
                 std::string v = ProbeText(i);
                 if (inUse) v = v.empty() ? "使用中" : "使用中・" + v;
                 auto it = new tsl::elm::ListItem(s.name, v.empty() ? (std::string(s.host) + ":" + std::to_string(s.port)) : v);
@@ -539,7 +532,6 @@ namespace {
                         LoadConfig();
                         if (i < g_cfg.count) {
                             g_cfg.current = i;
-                            g_cfg.preset = -1;
                             g_cfg.mode = LP_MODE_INTERNET;
                             Apply();
                         }
@@ -564,40 +556,15 @@ namespace {
                 list->addItem(add);
             }
 
-            list->addItem(new tsl::elm::CategoryHeader("內建公開伺服器（社群清單，可能隨時下線）"));
-            /* alive first, sorted by ping; then the rest in list order */
-            std::vector<int> order;
-            for (int p = 0; p < lp_preset_count; p++) order.push_back(p);
-            if (g_probeValid) {
-                std::stable_sort(order.begin(), order.end(), [](int a, int b) {
-                    const int ia = g_cfg.count + a, ib = g_cfg.count + b;
-                    const bool oa = ia < g_probeCount && g_probe[ia].status == LP_PROBE_OK;
-                    const bool ob = ib < g_probeCount && g_probe[ib].status == LP_PROBE_OK;
-                    if (oa != ob) return oa;
-                    if (oa && ob) return g_probe[ia].ping_ms < g_probe[ib].ping_ms;
-                    return false;
-                });
+            if (g_cfg.count > 0) {
+                list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                    r->drawString("「沒回應」或「查不到位址」代表那台伺服器\n目前沒開或位址打錯。延遲越低越好。", false, x + 5, y + 22, 14, r->a(tsl::style::color::ColorDescription));
+                }), 55);
+            } else {
+                list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                    r->drawString("還沒有伺服器。按「新增伺服器」輸入\n自己或朋友的 lan-play 伺服器位址。", false, x + 5, y + 22, 15, r->a(tsl::style::color::ColorDescription));
+                }), 55);
             }
-            for (int p : order) {
-                const lp_preset_t &ps = lp_presets[p];
-                std::string label = std::string(ps.region) + "｜" + ps.name;
-                std::string v = ProbeText(g_cfg.count + p);
-                if (g_cfg.preset == p) v = v.empty() ? "使用中" : "使用中・" + v;
-                auto it = new tsl::elm::ListItem(label, v);
-                it->setClickListener([p](u64 keys) {
-                    if (!(keys & HidNpadButton_A)) return false;
-                    LoadConfig();
-                    g_cfg.preset = p;
-                    g_cfg.mode = LP_MODE_INTERNET;
-                    Apply();
-                    g_pendingBack++;
-                    return true;
-                });
-                list->addItem(it);
-            }
-            list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
-                r->drawString("「沒回應」或「查不到位址」代表那台伺服器\n目前沒開。延遲越低越好。", false, x + 5, y + 22, 14, r->a(tsl::style::color::ColorDescription));
-            }), 55);
 
             frame->setContent(list);
             return frame;

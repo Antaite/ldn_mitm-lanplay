@@ -59,7 +59,7 @@ jobs:
       - name: Upload debug ELFs
         uses: actions/upload-artifact@v4
         with:
-          name: elf_AMS${{ matrix.ams }}
+          name: debug-elf_AMS${{ matrix.ams }}
           path: |
             ldn_mitm/ldn_mitm.elf
             overlay/overlay.elf
@@ -81,6 +81,11 @@ jobs:
           pattern: ldn_mitm-lanplay_*
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: debug-elf_*
+          path: elf
+
       - name: Zip packages
         run: |
           cd dist
@@ -88,6 +93,8 @@ jobs:
           ls -la
           # fail loudly if the overlay ever goes missing again
           for z in *.zip; do unzip -l "$z" | grep -q 'switch/.overlays/ldnmitm_config.ovl' || { echo "overlay missing in $z"; exit 1; }; done
+          # debug symbols for reading Atmosphère crash reports (not needed on the console)
+          cd ../elf && for d in */; do (cd "$d" && zip -qr "../../dist/${d%/}.zip" .); done
 
       - uses: softprops/action-gh-release@v2
         with:

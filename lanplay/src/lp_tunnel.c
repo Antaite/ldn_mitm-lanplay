@@ -280,6 +280,12 @@ static int dns_query(uint32_t dns_ip, const char *host, uint32_t *out) {
 
 static int resolve(const char *host, uint32_t *out) {
     if (lp_str_to_ip(host, out) == 0) return 0;
+    /* Plain DNS first: fast, bounded, and independent of the firmware 23 resolver changes. */
+    uint32_t dns[3] = { lp_platform_dns_server(), 0x01010101u /* 1.1.1.1 */, 0x08080808u };
+    for (int i = 0; i < 3; i++) {
+        if (dns[i] && dns_query(dns[i], host, out) == 0) return 0;
+    }
+    /* Fallback: system resolver. */
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;
@@ -293,11 +299,6 @@ static int resolve(const char *host, uint32_t *out) {
             }
         }
         freeaddrinfo(res);
-    }
-    /* Fallback: plain DNS query (firmware 23 changed the system resolver). */
-    uint32_t dns[3] = { lp_platform_dns_server(), 0x01010101u /* 1.1.1.1 */, 0x08080808u };
-    for (int i = 0; i < 3; i++) {
-        if (dns[i] && dns_query(dns[i], host, out) == 0) return 0;
     }
     return -1;
 }

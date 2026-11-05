@@ -5,6 +5,7 @@
 #include <stratosphere.hpp>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include "lanplay/lp_platform.h"
 #include "../../../ldn_mitm/source/debug.hpp"
 
@@ -35,6 +36,24 @@ namespace {
 }
 
 extern "C" {
+
+/*
+ * Stratosphere replaces libnx's allocator hooks with stubs that abort
+ * ("__libnx_alloc was called"). libnx's getaddrinfo() and a few socket
+ * helpers need them, so route them to the system module's malloc.
+ * This was the 1.2.2 crash right after picking a server.
+ */
+void *__libnx_alloc(size_t size) {
+    return std::malloc(size);
+}
+
+void *__libnx_aligned_alloc(size_t alignment, size_t size) {
+    return ::aligned_alloc(alignment, (size + alignment - 1) & ~(alignment - 1));
+}
+
+void __libnx_free(void *p) {
+    std::free(p);
+}
 
 int lp_thread_start(int slot, void (*fn)(void *), void *arg) {
     if (slot < 0 || slot >= LP_THREAD_COUNT || g_started[slot]) {

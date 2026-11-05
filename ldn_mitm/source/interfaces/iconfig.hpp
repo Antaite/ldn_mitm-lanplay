@@ -21,7 +21,7 @@ namespace ams::mitm::ldn {
     AMS_SF_METHOD_INFO(C, H, 65003, Result, SetLogging, 	(u32 enabled), 											(enabled))	\
     AMS_SF_METHOD_INFO(C, H, 65004, Result, GetEnabled, 	(ams::sf::Out<u32> enabled), 							(enabled))	\
     AMS_SF_METHOD_INFO(C, H, 65005, Result, SetEnabled, 	(u32 enabled), 											(enabled))	\
-    AMS_SF_METHOD_INFO(C, H, 65100, Result, GetLanPlayStatus,    (ams::sf::Out<ams::mitm::ldn::LanPlayStatusRaw> status), (status)) \
+    AMS_SF_METHOD_INFO(C, H, 65100, Result, GetLanPlayStatus,    (const ams::sf::OutBuffer &status),                     (status)) \
     AMS_SF_METHOD_INFO(C, H, 65101, Result, ReloadLanPlayConfig, (),                                                     ())       \
     AMS_SF_METHOD_INFO(C, H, 65102, Result, GetMode,             (ams::sf::Out<u32> mode),                               (mode))   \
     AMS_SF_METHOD_INFO(C, H, 65103, Result, SetMode,             (u32 mode),                                             (mode))   \

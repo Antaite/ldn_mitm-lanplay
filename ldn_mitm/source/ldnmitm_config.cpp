@@ -36,12 +36,14 @@ namespace ams::mitm::ldn {
         }
         R_SUCCEED();
     }
-    Result LdnConfig::GetLanPlayStatus(sf::Out<LanPlayStatusRaw> status) {
+    Result LdnConfig::GetLanPlayStatus(const sf::OutBuffer &status) {
+        /* 0x100 bytes do not fit in the IPC message as raw data, so this goes through a buffer. */
         static_assert(sizeof(LanPlayStatusRaw) == sizeof(lp_status_t));
+        R_UNLESS(status.GetSize() >= sizeof(lp_status_t), MAKERESULT(0xFD, 95));
         lp_status_t st;
         std::memset(std::addressof(st), 0, sizeof(st));
         lanplay::GetStatus(std::addressof(st));
-        std::memcpy(status.GetPointer()->raw, std::addressof(st), sizeof(st));
+        std::memcpy(status.GetPointer(), std::addressof(st), sizeof(st));
         R_SUCCEED();
     }
     Result LdnConfig::ReloadLanPlayConfig() {

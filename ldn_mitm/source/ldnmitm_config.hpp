@@ -24,7 +24,7 @@ namespace ams::mitm::ldn {
             Result GetEnabled(sf::Out<u32> enabled);
             Result SetEnabled(u32 enabled);
             /* lan-play extensions */
-            Result GetLanPlayStatus(sf::Out<LanPlayStatusRaw> status);
+            Result GetLanPlayStatus(const sf::OutBuffer &status);
             Result ReloadLanPlayConfig();
             Result GetMode(sf::Out<u32> mode);
             Result SetMode(u32 mode);

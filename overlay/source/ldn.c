@@ -46,15 +46,12 @@ Result ldnMitmSaveLogToFile(LdnMitmConfigService *s) {
     return serviceDispatch(&s->s, 65000);
 }
 
-typedef struct { u8 raw[0x100]; } LdnMitmLanPlayStatusRaw;
 
 Result ldnMitmGetLanPlayStatus(LdnMitmConfigService *s, void *out_status_0x100) {
-    LdnMitmLanPlayStatusRaw tmp;
-    Result rc = serviceDispatchOut(&s->s, 65100, tmp);
-    if (R_SUCCEEDED(rc)) {
-        memcpy(out_status_0x100, &tmp, sizeof(tmp));
-    }
-    return rc;
+    return serviceDispatch(&s->s, 65100,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
+        .buffers = { { out_status_0x100, 0x100 } },
+    );
 }
 
 Result ldnMitmReloadLanPlayConfig(LdnMitmConfigService *s) {

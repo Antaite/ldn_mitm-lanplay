@@ -23,6 +23,7 @@
 
 extern "C" {
 #include "lanplay/lp_config.h"
+#include "lanplay/lp_presets.h"
 }
 
 namespace {
@@ -38,6 +39,11 @@ namespace {
     lp_config_t          g_cfg;
     std::string          g_toast;
     u64                  g_toastUntil = 0;
+
+    /* Public server pick list probe */
+    lp_probe_result_t    g_pubProbe[LP_PROBE_MAX];
+    bool                 g_pubProbeValid = false;
+    bool                 g_pubProbeRequested = false;
 
     /* Server probe results, one per saved server */
     lp_probe_result_t    g_probe[LP_PROBE_MAX];
@@ -74,14 +80,14 @@ namespace {
             lp_config_default(&g_cfg);
             return;
         }
-        static char buf[8192];
+        static char buf[16384];
         size_t n = fread(buf, 1, sizeof(buf), f);
         fclose(f);
         lp_config_parse(&g_cfg, buf, n);
     }
 
     bool SaveConfig() {
-        static char buf[8192];
+        static char buf[16384];
         size_t n = lp_config_format(&g_cfg, buf, sizeof(buf));
         if (n == 0) {
             return false;
@@ -193,6 +199,33 @@ namespace {
         }
         g_probeCount = n;
         g_probeValid = g_lanplayOk && R_SUCCEEDED(ldnMitmProbeServers(&g_ldnConfig, t, sizeof(t[0]) * n, g_probe, sizeof(g_probe[0]) * n));
+    }
+
+    void DoPublicProbe() {
+        static lp_probe_target_t t[LP_PROBE_MAX];
+        int n = 0;
+        for (int i = 0; i < lp_preset_count && n < LP_PROBE_MAX; i++, n++) {
+            memset(&t[n], 0, sizeof(t[n]));
+            snprintf(t[n].host, sizeof(t[n].host), "%s", lp_presets[i].host);
+            t[n].port = lp_presets[i].port;
+        }
+        g_pubProbeValid = g_lanplayOk && R_SUCCEEDED(ldnMitmProbeServers(&g_ldnConfig, t, sizeof(t[0]) * n, g_pubProbe, sizeof(g_pubProbe[0]) * n));
+    }
+
+    std::string PubProbeText(int p) {
+        if (!g_pubProbeValid || p < 0 || p >= lp_preset_count) return "";
+        const lp_probe_result_t &r = g_pubProbe[p];
+        if (r.status == LP_PROBE_OK) return std::to_string(r.ping_ms) + " ms";
+        if (r.status == LP_PROBE_DNS_FAILED) return "查不到位址";
+        return "沒回應";
+    }
+
+    /* index in g_cfg.servers with the same host:port, or -1 */
+    int FindSaved(const char *host, uint16_t port) {
+        for (int i = 0; i < g_cfg.count; i++) {
+            if (g_cfg.servers[i].port == port && !strcmp(g_cfg.servers[i].host, host)) return i;
+        }
+        return -1;
     }
 
     std::string ProbeText(int idx) {
@@ -511,6 +544,71 @@ namespace {
         bool m_confirmDelete = false;
     };
 
+    /* ------------------------------------------------------ public servers */
+
+    class PublicServerGui : public tsl::Gui {
+    public:
+        tsl::elm::Element *createUI() override {
+            LoadConfig();
+            auto frame = new tsl::elm::OverlayFrame("從公開伺服器挑選", "\uE0E0 加入並使用");
+            auto list = new tsl::elm::List();
+            list->addItem(new tsl::elm::CategoryHeader("公開伺服器（社群架設，可能隨時下線）"));
+
+            /* responding servers first, by latency; the rest keep list order */
+            std::vector<int> order;
+            for (int p = 0; p < lp_preset_count; p++) order.push_back(p);
+            if (g_pubProbeValid) {
+                std::stable_sort(order.begin(), order.end(), [](int a, int b) {
+                    const bool oa = g_pubProbe[a].status == LP_PROBE_OK, ob = g_pubProbe[b].status == LP_PROBE_OK;
+                    if (oa != ob) return oa;
+                    if (oa && ob) return g_pubProbe[a].ping_ms < g_pubProbe[b].ping_ms;
+                    return false;
+                });
+            }
+            for (int p : order) {
+                const lp_preset_t &ps = lp_presets[p];
+                std::string label = std::string(ps.region) + "｜" + ps.name;
+                std::string v = PubProbeText(p);
+                if (FindSaved(ps.host, ps.port) >= 0) v = v.empty() ? "已加入" : "已加入・" + v;
+                auto it = new tsl::elm::ListItem(label, v);
+                it->setClickListener([p](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    const lp_preset_t &ps = lp_presets[p];
+                    LoadConfig();
+                    int idx = FindSaved(ps.host, ps.port);
+                    if (idx < 0) {
+                        lp_server_t s;
+                        memset(&s, 0, sizeof(s));
+                        snprintf(s.name, sizeof(s.name), "%s｜%s", ps.region, ps.name);
+                        snprintf(s.host, sizeof(s.host), "%s", ps.host);
+                        s.port = ps.port;
+                        idx = lp_config_add_server(&g_cfg, &s);
+                        if (idx < 0) {
+                            Toast("我的伺服器已滿 16 台，請先刪掉幾台");
+                            g_pendingBack += 2;
+                            return true;
+                        }
+                    }
+                    g_cfg.current = idx;
+                    g_cfg.mode = LP_MODE_INTERNET;
+                    Apply();
+                    g_pendingBack += 2;   /* public list -> server list -> main */
+                    return true;
+                });
+                list->addItem(it);
+            }
+            list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                r->drawString("按 \uE0E0 會加進「我的伺服器」並開始使用；\n不要的之後在「我的伺服器」按 \uE0E3 刪除。", false, x + 5, y + 22, 14, r->a(tsl::style::color::ColorDescription));
+            }), 55);
+            frame->setContent(list);
+            return frame;
+        }
+
+        void update() override {
+            ProcessPendingNav();
+        }
+    };
+
     /* ------------------------------------------------------------ server list */
 
     class ServerListGui : public tsl::Gui {
@@ -555,6 +653,13 @@ namespace {
                 });
                 list->addItem(add);
             }
+            m_itPublic = new tsl::elm::ListItem("＋ 從公開伺服器挑選…");
+            m_itPublic->setClickListener([](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                g_pubProbeRequested = true;
+                return true;
+            });
+            list->addItem(m_itPublic);
 
             if (g_cfg.count > 0) {
                 list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
@@ -571,7 +676,20 @@ namespace {
         }
 
         void update() override {
-            ProcessPendingNav();
+            if (ProcessPendingNav()) return;
+            if (g_pubProbeRequested) {
+                /* show "測試中…" for one frame, then probe (blocks ~3 s) and open the pick list */
+                if (!m_busyShown) {
+                    m_itPublic->setValue("測試中…");
+                    m_busyShown = true;
+                    return;
+                }
+                m_busyShown = false;
+                g_pubProbeRequested = false;
+                DoPublicProbe();
+                m_itPublic->setValue("");
+                tsl::changeTo<PublicServerGui>();
+            }
         }
 
         bool handleInput(u64 down, u64, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
@@ -582,6 +700,10 @@ namespace {
             }
             return false;
         }
+
+    private:
+        tsl::elm::ListItem *m_itPublic = nullptr;
+        bool m_busyShown = false;
     };
 
     /* ------------------------------------------------------------ room list */

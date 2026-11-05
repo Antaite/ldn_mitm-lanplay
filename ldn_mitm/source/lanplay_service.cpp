@@ -23,7 +23,7 @@ namespace ams::mitm::ldn::lanplay {
         constexpr const char ConfigDir0[] = "sdmc:/config";
         constexpr const char ConfigDir1[] = "sdmc:/config/ldn_mitm";
         constexpr const char ConfigPath[] = "sdmc:" LP_CONFIG_PATH;
-        constexpr size_t     ConfigMax    = 8 * 1024;
+        constexpr size_t     ConfigMax    = 16 * 1024;
 
         constinit os::SdkMutex g_lock;
         lp_config_t            g_config;

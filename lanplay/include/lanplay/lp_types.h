@@ -14,7 +14,7 @@ extern "C" {
 #endif
 
 #define LP_CONFIG_PATH      "/config/ldn_mitm/lanplay.ini"
-#define LP_MAX_SERVERS      16
+#define LP_MAX_SERVERS      32
 #define LP_DEFAULT_PORT     11451
 #define LP_SUBNET_NET       0x0A0D0000u   /* 10.13.0.0   (host order) */
 #define LP_SUBNET_MASK      0xFFFF0000u   /* 255.255.0.0 (host order) */

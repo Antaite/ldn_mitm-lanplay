@@ -18,7 +18,7 @@
 
 const size_t TlsBackupSize = 0x100;
 
-static std::atomic_bool g_logging_enabled = false;
+static std::atomic_bool g_logging_enabled = true;   /* on by default while testing */
 #define BACKUP_TLS() u8 _tls_backup[TlsBackupSize];memcpy(_tls_backup, armGetTls(), TlsBackupSize);
 #define RESTORE_TLS() memcpy(armGetTls(), _tls_backup, TlsBackupSize);
 
@@ -68,6 +68,14 @@ namespace ams::log
             R_TRY(GetFileSize(&LogOffset, LogFile));
 
             fs::CloseFile(LogFile);
+
+            /* Logging is on by default: keep the file from growing without bound. */
+            constexpr s64 MaxLogSize = 1024 * 1024;
+            if (LogOffset > MaxLogSize) {
+                R_TRY(fs::DeleteFile(LogFilePath));
+                R_TRY(fs::CreateFile(LogFilePath, 0));
+                LogOffset = 0;
+            }
         }
 
         R_SUCCEED();

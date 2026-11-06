@@ -1,4 +1,5 @@
 #include "ldn_icommunication.hpp"
+#include "net_backend.hpp"
 #include <arpa/inet.h>
 
 namespace ams::mitm::ldn {
@@ -83,6 +84,15 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::GetIpv4Address(sf::Out<u32> address, sf::Out<u32> netmask) {
+        if (this->lanDiscovery.isVirtual()) {
+            /* Internet mode: the room lives on the lan-play network, so does the game. */
+            u32 ip = 0, mask = 0;
+            R_TRY(net::GetIpConfig(true, &ip, &mask));
+            address.SetValue(ip);
+            netmask.SetValue(mask);
+            LogFormat("get_ipv4_address (virtual) %x %x", ip, mask);
+            R_SUCCEED();
+        }
         u32 gateway, primary_dns, secondary_dns;
         Result rc = nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);
 

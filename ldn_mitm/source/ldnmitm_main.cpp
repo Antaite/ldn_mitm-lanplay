@@ -241,7 +241,9 @@ namespace ams {
     }
 
     void Main() {
-        R_ABORT_UNLESS(log::Initialize());
+        if (R_FAILED(log::Initialize())) {
+            ::SetLogging(0);   /* SD problem: run without a log rather than abort */
+        }
         LogFormat("main");
 
         constexpr sm::ServiceName MitmServiceName = sm::ServiceName::Encode("ldn:u");

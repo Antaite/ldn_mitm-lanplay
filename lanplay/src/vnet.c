@@ -133,7 +133,13 @@ long vnet_recvfrom(int fd, void *buf, size_t len, uint32_t *ip, uint16_t *port, 
 
 int vnet_setopt(int fd, int opt, int value) {
     switch (opt) {
-        case VNET_OPT_BROADCAST: return lwip_setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof value);
+        case VNET_OPT_BROADCAST: {
+            /* Horizon accepts SO_BROADCAST on any socket; lwIP only on UDP (ENOPROTOOPT
+             * otherwise), which made CreateNetwork fail on the TCP listen socket. */
+            int type = 0; socklen_t tl = sizeof type;
+            if (lwip_getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) == 0 && type != SOCK_DGRAM) return 0;
+            return lwip_setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof value);
+        }
         case VNET_OPT_REUSEADDR: return lwip_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof value);
         case VNET_OPT_NODELAY:   return lwip_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof value);
         default: return -1;

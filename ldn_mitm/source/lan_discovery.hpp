@@ -189,6 +189,9 @@ namespace ams::mitm::ldn {
             u16 getListenPort() const {
                 return this->listenPort;
             }
+            bool isVirtual() const {
+                return this->virt;
+            }
             CommState getState() const {
                 return this->state;
             };

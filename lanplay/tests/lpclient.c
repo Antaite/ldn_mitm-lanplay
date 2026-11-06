@@ -63,6 +63,17 @@ int main(int argc, char **argv) {
     lp_tunnel_set_input(vnet_input);
     lp_tunnel_set_conflict_handler(conflict_cb);
     lp_tunnel_start(&p);
+    if (!strcmp(argv[1], "apsock")) {
+        /* Same calls as LANDiscovery::initTcp(true) + setSocketOpts on the virtual network. */
+        int fd = vnet_socket(VNET_SOCK_STREAM);
+        int b = vnet_setopt(fd, VNET_OPT_BROADCAST, 1);
+        int r = vnet_setopt(fd, VNET_OPT_REUSEADDR, 1);
+        int bi = vnet_bind(fd, 0, 11452), li = vnet_listen(fd, 10);
+        int u = vnet_socket(VNET_SOCK_DGRAM), ub = vnet_setopt(u, VNET_OPT_BROADCAST, 1);
+        printf("tcp: broadcast=%d reuse=%d bind=%d listen=%d | udp: broadcast=%d\n", b, r, bi, li, ub);
+        lp_tunnel_stop();
+        return 0;
+    }
     if (!strcmp(argv[1], "idle")) {
         /* lpclient idle server ip seconds : stay connected, then print the final virtual IP */
         lp_sleep_ms((uint64_t)atoi(argc > 4 ? argv[4] : "10") * 1000);

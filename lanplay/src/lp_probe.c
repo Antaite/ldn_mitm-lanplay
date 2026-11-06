@@ -122,7 +122,7 @@ void lp_probe(const lp_probe_target_t *t, int n, lp_probe_result_t *res) {
         if (round == 0 || (round == 1 && el >= PING_RESEND_MS)) {
             for (int i = 0; i < n; i++) {
                 if (!ok[i] || res[i].status == LP_PROBE_OK) continue;
-                uint8_t pkt[4] = { 0x02, 0xA5, (uint8_t)i, (uint8_t)round };
+                uint8_t pkt[5] = { 0x02, 0xA5, (uint8_t)i, (uint8_t)round, 0 };   /* 4-byte payload for the rust server */
                 struct sockaddr_in a; mk(&a, ip[i], t[i].port);
                 sent[i][round] = lp_now_ms();
                 sendto(fd, pkt, sizeof pkt, 0, (struct sockaddr *)&a, sizeof a);

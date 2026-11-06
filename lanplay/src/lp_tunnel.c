@@ -6,7 +6,7 @@
  *   byte 0      : type (bit 7 = encrypted, never used)
  *   0x00 KEEPALIVE  (no payload, every 10 s)
  *   0x01 IPV4       raw IPv4 packet
- *   0x02 PING       client sends 1+3 bytes, server echoes the first 4 bytes
+ *   0x02 PING       client sends 1+4 bytes; node server echoes the first 4 bytes, rust server echoes all 5
  *   0x03 IPV4_FRAG  16 byte header (src[4] dst[4] id u16 part u8 total u8 len u16 pmtu u16) + data
  *   0x04 AUTH_ME    server: auth_type(0) + 64 byte challenge
  *                   client: sha1(sha1(password) + challenge) + username
@@ -482,7 +482,7 @@ static void tunnel_thread(void *arg) {
             }
             if (now >= next_ping) {
                 uint16_t seq = ++T.ping_seq;
-                uint8_t pl[3] = { (uint8_t)(seq >> 8), (uint8_t)seq, 0 };
+                uint8_t pl[4] = { (uint8_t)(seq >> 8), (uint8_t)seq, 0, 0 };   /* rust server requires exactly 4 bytes */
                 T.pings[seq % PING_SLOTS].seq = seq;
                 T.pings[seq % PING_SLOTS].sent = now;
                 send_type(T_PING, pl, sizeof pl);

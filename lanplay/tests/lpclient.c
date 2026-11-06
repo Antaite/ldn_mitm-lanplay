@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         lp_sleep_ms((uint64_t)atoi(argc > 4 ? argv[4] : "10") * 1000);
         lp_status_t s; lp_tunnel_get_status(&s);
         char b[16]; lp_ip_to_str(s.virt_ip, b);
-        printf("final ip %s (vnet %s)\n", b, vnet_get_ip() == s.virt_ip ? "same" : "DIFFERENT");
+        printf("final ip %s (vnet %s) state=%d ping=%d\n", b, vnet_get_ip() == s.virt_ip ? "same" : "DIFFERENT", (int)s.state, (int)s.ping_ms);
         lp_tunnel_stop();
         return 0;
     }

@@ -13,4 +13,8 @@ namespace ams::mitm::ldn::rooms {
     /* Blocks for about 1.5 s. */
     Result Scan(lp_room_t *out, size_t max_rooms, u32 *out_count);
 
+    /* LANDiscovery reports the room it hosts (nullptr = none). A console never
+     * receives its own scan broadcast, so Scan() adds this one directly. */
+    void PublishLocal(const void *network_info);
+
 }

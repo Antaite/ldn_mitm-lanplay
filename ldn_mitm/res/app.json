@@ -169,7 +169,7 @@
         },
         {
             "type": "handle_table_size",
-            "value": 128
+            "value": 256
         },
         {
             "type": "debug_flags",

@@ -7,6 +7,11 @@
 #include "lanplay/lp_config.h"
 #include "lanplay/lp_platform.h"
 #include "lanplay/vnet.h"
+#include "lanplay/lp_bridge.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
 #include "lanplay/lp_probe.h"
 #include "lanplay/lp_dns.h"
 #include <stdio.h>
@@ -63,6 +68,52 @@ int main(int argc, char **argv) {
     lp_tunnel_set_input(vnet_input);
     lp_tunnel_set_conflict_handler(conflict_cb);
     lp_tunnel_start(&p);
+    if (!strcmp(argv[1], "bgame")) {
+        /* Plays the game: a REAL host UDP socket, bridged; answers PING with PONG. */
+        if (lp_bridge_start() != 0) { printf("bridge start failed\n"); return 1; }
+        int g = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons(49152);
+        if (bind(g, (struct sockaddr *)&a, sizeof a) != 0) { perror("bind"); return 1; }
+        if (lp_bridge_open(1, g, 49152, 0x7F000001, 0) != 0) { printf("open failed\n"); return 1; }
+        int got = 0;
+        for (int i = 0; i < 100 && got < 3; i++) {
+            uint8_t b[2048]; struct sockaddr_in f; socklen_t fl = sizeof f;
+            struct timeval tv = { 0, 100000 }; setsockopt(g, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+            long n = recvfrom(g, b, sizeof b, 0, (struct sockaddr *)&f, &fl);
+            if (n <= 0) continue;
+            uint32_t ip; uint16_t port;
+            int ours = ntohs(f.sin_port) == lp_bridge_inject_port() && lp_bridge_parse(b, (size_t)n, &ip, &port);
+            if (!ours) { printf("game: foreign datagram\n"); continue; }
+            char s[16]; lp_ip_to_str(ip, s);
+            printf("game: %ld bytes from %s:%u '%.*s'\n", n - LP_BRIDGE_HDR, s, port, (int)(n - LP_BRIDGE_HDR), b + LP_BRIDGE_HDR);
+            lp_bridge_sendto(1, g, "PONG", 4, ip, port);
+            got++;
+        }
+        lp_bridge_close(1, g);
+        lp_sleep_ms(100);
+        printf("game: done, %d exchanged\n", got);
+        lp_tunnel_stop();
+        return got == 3 ? 0 : 1;
+    }
+    if (!strcmp(argv[1], "bpeer")) {
+        /* A remote console: vnet UDP to the game's virtual IP:49152, expects PONG. */
+        uint32_t host; lp_str_to_ip(argv[4], &host);
+        int u = vnet_socket(VNET_SOCK_DGRAM); vnet_bind(u, 0, 50000);
+        int ok = 0;
+        for (int i = 0; i < 3; i++) {
+            char m[16]; snprintf(m, sizeof m, "PING%d", i);
+            vnet_sendto(u, m, strlen(m), host, 49152);
+            for (int k = 0; k < 20; k++) {
+                char b[64]; uint32_t ip; uint16_t port;
+                long n = vnet_recvfrom(u, b, sizeof b, &ip, &port, 1);
+                if (n == 4 && !memcmp(b, "PONG", 4) && ip == host && port == 49152) { ok++; break; }
+                lp_sleep_ms(50);
+            }
+        }
+        printf("peer: %d/3 PONG from %s:49152\n", ok, argv[4]);
+        lp_tunnel_stop();
+        return ok == 3 ? 0 : 1;
+    }
     if (!strcmp(argv[1], "apsock")) {
         /* Same calls as LANDiscovery::initTcp(true) + setSocketOpts on the virtual network. */
         int fd = vnet_socket(VNET_SOCK_STREAM);

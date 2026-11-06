@@ -26,6 +26,7 @@ namespace ams::mitm::ldn::lanplay {
     bool UseVirtualNetwork();
     /* LDN state hook: true while a room is open (host) or joined (station). */
     void SetSessionActive(bool active);
+    bool IsSessionActive();
     /* Persisted override of the mode, used by the old SetEnabled IPC. */
     Result SetMode(u32 mode);
 

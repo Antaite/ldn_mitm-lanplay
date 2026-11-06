@@ -147,8 +147,8 @@ int vnet_setopt(int fd, int opt, int value) {
 }
 
 int vnet_poll(struct vnet_pollfd *fds, unsigned n, int timeout_ms) {
-    struct pollfd pf[16];
-    if (n > 16) n = 16;
+    struct pollfd pf[32];
+    if (n > 32) n = 32;
     for (unsigned i = 0; i < n; i++) {
         pf[i].fd = fds[i].fd;
         pf[i].events = (short)(((fds[i].events & VNET_POLLIN) ? POLLIN : 0) | ((fds[i].events & VNET_POLLOUT) ? POLLOUT : 0));

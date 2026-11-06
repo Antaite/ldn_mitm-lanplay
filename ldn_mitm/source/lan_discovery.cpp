@@ -426,6 +426,9 @@ namespace ams::mitm::ldn {
             i.overrideInfo();
         }
         this->networkInfo.ldn.nodeCount = count + 1;
+        if (this->state == CommState::AccessPointCreated) {
+            rooms::PublishLocal(std::addressof(this->networkInfo));
+        }
 
         for (auto &i : stations) {
             if (i.getStatus() == NodeStatus::Connected) {
@@ -697,7 +700,15 @@ namespace ams::mitm::ldn {
         }
         this->initNodeStateChange();
 
-        svcSleepThread(1000000000L); // 1sec
+        if (this->virt) {
+            /* Over the internet SyncNetwork can take longer than the stock fixed 1 s:
+             * wait for it (up to 3 s), and return as soon as it arrives. */
+            for (int i = 0; i < 60 && this->state != CommState::StationConnected; i++) {
+                svcSleepThread(50'000'000L);
+            }
+        } else {
+            svcSleepThread(1000000000L); // 1sec
+        }
 
         return 0;
     }

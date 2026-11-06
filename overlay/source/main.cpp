@@ -743,8 +743,8 @@ namespace {
                 list->addItem(new tsl::elm::CategoryHeader(head));
                 for (u32 i = 0; i < g_roomCount; i++) {
                     const lp_room_t room = g_rooms[i];
-                    char cnt[24];
-                    snprintf(cnt, sizeof(cnt), "%u/%u 人%s", room.node_count, room.node_max, "");
+                    char cnt[48];
+                    snprintf(cnt, sizeof(cnt), "%u/%u 人%s", room.node_count, room.node_max, room.is_own ? "（你的房間）" : "");
                     auto item = new tsl::elm::ListItem(GameName(room.local_comm_id), cnt);
                     list->addItem(item);
 

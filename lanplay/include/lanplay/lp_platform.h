@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-enum { LP_THREAD_TUNNEL = 0, LP_THREAD_INFO = 1, LP_THREAD_COUNT = 2 };
+enum { LP_THREAD_TUNNEL = 0, LP_THREAD_INFO = 1, LP_THREAD_BRIDGE = 2, LP_THREAD_COUNT = 3 };
 
 int      lp_thread_start(int slot, void (*fn)(void *), void *arg);   /* 0 on success */
 void     lp_thread_join(int slot);

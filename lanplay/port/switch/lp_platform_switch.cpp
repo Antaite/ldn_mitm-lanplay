@@ -13,13 +13,14 @@ namespace {
 
     using namespace ams;
 
-    constexpr size_t StackSizes[LP_THREAD_COUNT] = { 0x4000, 0x3000 };
-    constexpr s32    Priorities[LP_THREAD_COUNT] = { 0x14, 0x16 };
-    constexpr const char *Names[LP_THREAD_COUNT] = { "lanplay::Tunnel", "lanplay::Info" };
+    constexpr size_t StackSizes[LP_THREAD_COUNT] = { 0x4000, 0x3000, 0x3000 };
+    constexpr s32    Priorities[LP_THREAD_COUNT] = { 0x14, 0x16, 0x15 };
+    constexpr const char *Names[LP_THREAD_COUNT] = { "lanplay::Tunnel", "lanplay::Info", "lanplay::Bridge" };
 
     alignas(os::ThreadStackAlignment) constinit u8 g_stack_tunnel[0x4000];
     alignas(os::ThreadStackAlignment) constinit u8 g_stack_info[0x3000];
-    u8 * const g_stacks[LP_THREAD_COUNT] = { g_stack_tunnel, g_stack_info };
+    alignas(os::ThreadStackAlignment) constinit u8 g_stack_bridge[0x3000];
+    u8 * const g_stacks[LP_THREAD_COUNT] = { g_stack_tunnel, g_stack_info, g_stack_bridge };
 
     os::ThreadType g_threads[LP_THREAD_COUNT];
     constinit bool g_started[LP_THREAD_COUNT];

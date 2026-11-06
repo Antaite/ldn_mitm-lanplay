@@ -25,6 +25,10 @@ namespace ams::mitm::ldn::rooms {
 
         constinit os::SdkMutex g_scan_lock;
 
+        constinit os::SdkMutex g_local_lock;
+        constinit bool g_local_valid = false;
+        alignas(8) constinit u8 g_local_info[sizeof(NetworkInfo)] = {};
+
         /* Same zero run-length scheme as LanSocket::decompress. */
         bool Decompress(const u8 *in, size_t in_size, u8 *out, size_t out_cap, size_t *out_size) {
             const u8 *in_end = in + in_size;
@@ -64,6 +68,8 @@ namespace ams::mitm::ldn::rooms {
             net::SendTo(fd, std::addressof(h), sizeof(h), std::addressof(to));
         }
 
+        bool AddRoom(const NetworkInfo *info, lp_room_t *out, size_t max_rooms, u32 *count, bool own);
+
         /* Returns true when a new room was added. */
         bool HandleReply(const u8 *buf, size_t len, lp_room_t *out, size_t max_rooms, u32 *count) {
             if (len < sizeof(LANPacketHeader) || *count >= max_rooms) {
@@ -91,8 +97,13 @@ namespace ams::mitm::ldn::rooms {
             if (size != sizeof(NetworkInfo)) {
                 return false;
             }
-            const NetworkInfo *info = reinterpret_cast<const NetworkInfo *>(info_buf);
+            return AddRoom(reinterpret_cast<const NetworkInfo *>(info_buf), out, max_rooms, count, false);
+        }
 
+        bool AddRoom(const NetworkInfo *info, lp_room_t *out, size_t max_rooms, u32 *count, bool own) {
+            if (*count >= max_rooms) {
+                return false;
+            }
             /* De-duplicate (we broadcast twice). */
             const u32 host_ip = info->ldn.nodes[0].ipv4Address;
             for (u32 i = 0; i < *count; i++) {
@@ -110,6 +121,7 @@ namespace ams::mitm::ldn::rooms {
             r.node_count    = info->ldn.nodeCount;
             r.node_max      = info->ldn.nodeCountMax;
             r.has_password  = 0;   /* the passphrase is not visible in scan replies */
+            r.is_own        = own ? 1 : 0;
             int p = 0;
             for (int n = 0; n < NodeCountMax && p < LP_ROOM_PLAYERS; n++) {
                 const NodeInfo &node = info->ldn.nodes[n];
@@ -149,6 +161,13 @@ namespace ams::mitm::ldn::rooms {
         any.sin_family = AF_INET;
         R_UNLESS(net::Bind(fd, std::addressof(any)) == 0, ResultSocket);
 
+        {
+            std::scoped_lock lk2(g_local_lock);
+            if (g_local_valid) {
+                AddRoom(reinterpret_cast<const NetworkInfo *>(g_local_info), out, max_rooms, out_count, true);
+            }
+        }
+
         const s64 start = NowMs();
         bool resent = false;
         SendScan(fd, broadcast);
@@ -176,6 +195,14 @@ namespace ams::mitm::ldn::rooms {
         }
         LogFormat("rooms: scan found %u (virt=%d)", *out_count, virt ? 1 : 0);
         R_SUCCEED();
+    }
+
+    void PublishLocal(const void *network_info) {
+        std::scoped_lock lk(g_local_lock);
+        g_local_valid = network_info != nullptr;
+        if (g_local_valid) {
+            std::memcpy(g_local_info, network_info, sizeof(g_local_info));
+        }
     }
 
 }

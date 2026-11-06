@@ -33,6 +33,7 @@ extern "C" {
 
 #include "ldnmitm_service.hpp"
 #include "lanplay_service.hpp"
+#include "bsd_mitm.hpp"
 
 namespace ams {
 
@@ -159,6 +160,42 @@ namespace ams {
                 return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info), fsrv);
             }
 
+            /* bsd:u mitm for games in internet mode (their own UDP to 10.13.0.0/16).
+             * Separate manager: a game may hold several bsd sessions and blocking
+             * calls (recv/poll) occupy a thread each while they wait. */
+            struct BsdManagerOptions {
+                static constexpr size_t PointerBufferSize = 0x1000;
+                static constexpr size_t MaxDomains = 0;
+                static constexpr size_t MaxDomainObjects = 0;
+                static constexpr bool   CanDeferInvokeRequest = false;
+                static constexpr bool   CanManageMitmServers  = true;
+            };
+            constexpr size_t BsdMaxSessions = 20;
+
+            class BsdServerManager final : public sf::hipc::ServerManager<1, BsdManagerOptions, BsdMaxSessions> {
+                private:
+                    virtual ams::Result OnNeedsToAccept(int port_index, Server *server) override;
+            };
+
+            BsdServerManager g_bsd_manager;
+
+            Result BsdServerManager::OnNeedsToAccept(int port_index, Server *server) {
+                AMS_UNUSED(port_index);
+                std::shared_ptr<::Service> fsrv;
+                sm::MitmProcessInfo client_info;
+                server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
+                return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdMitm, mitm::bsd::BsdMitmService>(decltype(fsrv)(fsrv), client_info), fsrv);
+            }
+
+            constexpr size_t BsdThreads = 4;
+            constexpr size_t BsdThreadStackSize = 0x4000;
+            alignas(os::MemoryPageSize) u8 g_bsd_stacks[BsdThreads][BsdThreadStackSize];
+            os::ThreadType g_bsd_threads[BsdThreads];
+
+            void BsdLoop(void *) {
+                g_bsd_manager.LoopProcess();
+            }
+
             alignas(os::MemoryPageSize) u8 g_extra_thread_stacks[NumExtraThreads][ThreadStackSize];
             os::ThreadType g_extra_threads[NumExtraThreads];
 
@@ -253,6 +290,18 @@ namespace ams {
 
         /* Load lanplay.ini and start the lan-play tunnel when internet mode is selected. */
         mitm::ldn::lanplay::Initialize();
+
+        /* Game sockets: intercept bsd:u (decided per game launch in BsdMitmService::ShouldMitm). */
+        if (R_SUCCEEDED((mitm::g_bsd_manager.RegisterMitmServer<mitm::bsd::BsdMitmService>(0, sm::ServiceName::Encode("bsd:u"))))) {
+            for (size_t i = 0; i < mitm::BsdThreads; i++) {
+                R_ABORT_UNLESS(os::CreateThread(&mitm::g_bsd_threads[i], mitm::BsdLoop, nullptr, mitm::g_bsd_stacks[i], mitm::BsdThreadStackSize, mitm::ThreadPriority));
+                os::SetThreadNamePointer(&mitm::g_bsd_threads[i], "ldn_mitm::Bsd");
+                os::StartThread(&mitm::g_bsd_threads[i]);
+            }
+            LogFormat("bsd:u mitm registered");
+        } else {
+            LogFormat("bsd:u mitm NOT registered");
+        }
 
         R_ABORT_UNLESS(os::CreateThread(
             &mitm::g_thread,

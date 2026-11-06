@@ -103,7 +103,7 @@ typedef struct {
     uint8_t  node_count;
     uint8_t  node_max;
     uint8_t  has_password;
-    uint8_t  _pad;
+    uint8_t  is_own;           /* the room this console is hosting */
     char     players[LP_ROOM_PLAYERS][33];   /* players[0] = host */
     uint8_t  _reserved[0x120 - 20 - LP_ROOM_PLAYERS * 33];
 } lp_room_t;

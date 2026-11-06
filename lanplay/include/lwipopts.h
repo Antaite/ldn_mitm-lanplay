@@ -10,12 +10,12 @@
 #define MEM_ALIGNMENT                   8
 #define MEM_SIZE                        (128 * 1024)
 #define MEMP_NUM_PBUF                   64
-#define MEMP_NUM_UDP_PCB                8
+#define MEMP_NUM_UDP_PCB                40   /* ldn_mitm + bridged game sockets */
 #define MEMP_NUM_TCP_PCB                16
 #define MEMP_NUM_TCP_PCB_LISTEN         4
 #define MEMP_NUM_TCP_SEG                128
-#define MEMP_NUM_NETBUF                 32
-#define MEMP_NUM_NETCONN                24
+#define MEMP_NUM_NETBUF                 64
+#define MEMP_NUM_NETCONN                56
 #define MEMP_NUM_TCPIP_MSG_INPKT        64
 #define MEMP_NUM_SYS_TIMEOUT            (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 4)
 #define PBUF_POOL_SIZE                  64

@@ -201,6 +201,10 @@ namespace ams::mitm::ldn::lanplay {
         g_session_active.store(active, std::memory_order_relaxed);
     }
 
+    bool IsSessionActive() {
+        return g_session_active.load(std::memory_order_relaxed);
+    }
+
     u32 GetMode() {
         return g_mode;
     }

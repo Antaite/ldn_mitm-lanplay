@@ -22,7 +22,7 @@ extern "C" {
 
 #define LP_BRIDGE_MAX       32
 #define LP_BRIDGE_HDR       12          /* "LPB1" + ip(4) + port(2) + pad(2) */
-#define LP_BRIDGE_MAX_DGRAM 2048
+#define LP_BRIDGE_MAX_DGRAM 8192        /* lwIP/tunnel fragment anything above the MTU */
 
 typedef struct {
     uint64_t owner;        /* process id of the game */

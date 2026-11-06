@@ -82,6 +82,7 @@ namespace ams::mitm::ldn {
     }
 
     void LDUdpSocket::onClose() {
+        this->close();   /* stock ldn_mitm left it open, so poll kept reporting the error */
         discovery->disconnect_reason = DisconnectReason::SignalLost;
         discovery->setState(CommState::Error);
     };
@@ -702,13 +703,28 @@ namespace ams::mitm::ldn {
 
         if (this->virt) {
             /* Over the internet SyncNetwork can take longer than the stock fixed 1 s:
-             * wait for it (up to 3 s), and return as soon as it arrives. */
-            for (int i = 0; i < 60 && this->state != CommState::StationConnected; i++) {
-                svcSleepThread(50'000'000L);
+             * wait for it (up to 3 s), checking that the sync really lists us, and
+             * report failure instead of a join that never happened. */
+            for (int i = 0; i < 300; i++) {
+                if (this->state == CommState::StationConnected) {
+                    for (int n = 0; n < NodeCountMax; n++) {
+                        if (this->networkInfo.ldn.nodes[n].isConnected && this->networkInfo.ldn.nodes[n].ipv4Address == myNode.ipv4Address) {
+                            return 0;
+                        }
+                    }
+                }
+                svcSleepThread(10'000'000L);
             }
-        } else {
-            svcSleepThread(1000000000L); // 1sec
+            LogFormat("connect: no SyncNetwork listing us within 3 s");
+            {
+                std::scoped_lock lock(this->pollMutex);
+                if (this->tcp) {
+                    this->tcp->close();
+                }
+            }
+            return MAKERESULT(ModuleID, 33);
         }
+        svcSleepThread(1000000000L); // 1sec
 
         return 0;
     }

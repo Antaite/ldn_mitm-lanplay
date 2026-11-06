@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #define POLL_MS 20
+#define IDLE_MS 200        /* nothing bridged: wake rarely */
 
 typedef struct {
     lp_bridge_sock_t s;
@@ -154,7 +155,7 @@ static void pump(void *arg) {
         lp_unlock();
         for (int i = 0; i < nc; i++) vnet_close(closing[i]);
 
-        if (n == 0) { lp_sleep_ms(POLL_MS); continue; }
+        if (n == 0) { lp_sleep_ms(IDLE_MS); continue; }
         if (vnet_poll(pf, (unsigned)n, POLL_MS) <= 0) continue;
 
         for (int i = 0; i < n; i++) {

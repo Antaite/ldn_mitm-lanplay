@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
         if (lp_bridge_open(1, g, 49152, 0x7F000001, 0) != 0) { printf("open failed\n"); return 1; }
         int got = 0;
         for (int i = 0; i < 100 && got < 3; i++) {
-            uint8_t b[2048]; struct sockaddr_in f; socklen_t fl = sizeof f;
+            static uint8_t b[9000]; struct sockaddr_in f; socklen_t fl = sizeof f;
             struct timeval tv = { 0, 100000 }; setsockopt(g, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
             long n = recvfrom(g, b, sizeof b, 0, (struct sockaddr *)&f, &fl);
             if (n <= 0) continue;
@@ -101,8 +101,9 @@ int main(int argc, char **argv) {
         int u = vnet_socket(VNET_SOCK_DGRAM); vnet_bind(u, 0, 50000);
         int ok = 0;
         for (int i = 0; i < 3; i++) {
-            char m[16]; snprintf(m, sizeof m, "PING%d", i);
-            vnet_sendto(u, m, strlen(m), host, 49152);
+            static char m[3000]; memset(m, 'x', sizeof m); snprintf(m, 16, "PING%d", i);
+            size_t ml = getenv("BIG") ? sizeof m : strlen(m);
+            vnet_sendto(u, m, ml, host, 49152);
             for (int k = 0; k < 20; k++) {
                 char b[64]; uint32_t ip; uint16_t port;
                 long n = vnet_recvfrom(u, b, sizeof b, &ip, &port, 1);

@@ -128,6 +128,34 @@ namespace ams::mitm::bsd {
         return true;
     }
 
+    Result BsdMitmService::RegisterClient(sf::Out<u64> out_result, const LibraryConfigData &config, const sf::ClientProcessId &client_pid,
+                                          u64 tmem_size, sf::CopyHandle &&transfer_memory) {
+        AMS_UNUSED(client_pid);
+        const struct { LibraryConfigData config; u64 pid_placeholder; u64 tmem_size; } in = { config, 0, tmem_size };
+        u64 out = 0;
+        const Result rc = serviceMitmDispatchInOut(m_forward_service.get(), 0, in, out,
+            .in_send_pid = true,
+            .in_num_handles = 1,
+            .in_handles = { transfer_memory.GetOsHandle() },
+            .override_pid = m_client_info.process_id.value);
+        LogFormat("bsd: RegisterClient pid %" PRIu64 " rc=%x", this->Pid(), rc.GetValue());
+        out_result.SetValue(out);
+        return rc;
+    }
+
+    Result BsdMitmService::RegisterClientShared(sf::Out<u64> out_result, const LibraryConfigData &config, const sf::ClientProcessId &client_pid,
+                                                u64 tmem_size) {
+        AMS_UNUSED(client_pid);
+        const struct { LibraryConfigData config; u64 pid_placeholder; u64 tmem_size; } in = { config, 0, tmem_size };
+        u64 out = 0;
+        const Result rc = serviceMitmDispatchInOut(m_forward_service.get(), 33, in, out,
+            .in_send_pid = true,
+            .override_pid = m_client_info.process_id.value);
+        LogFormat("bsd: RegisterClientShared pid %" PRIu64 " rc=%x", this->Pid(), rc.GetValue());
+        out_result.SetValue(out);
+        return rc;
+    }
+
     /* Make sure a UDP socket has a twin on the virtual network (binding it to an ephemeral port if needed). */
     bool BsdMitmService::EnsureBridged(s32 fd) {
         if (lp_bridge_get(this->Pid(), fd, nullptr)) return true;
@@ -248,8 +276,11 @@ namespace ams::mitm::bsd {
                                       s32 *ret, s32 *err, u32 *addrlen) {
         const InFdFlags in = { fd, flags };
         Out3 o = { -1, 0, 0 };
+        /* The bsd manager runs on one thread, so one static buffer serves every call;
+         * only an unusually large read falls back to the heap. */
+        alignas(8) static u8 s_buf[LP_BRIDGE_HDR + LP_BRIDGE_MAX_DGRAM];
         const size_t want = std::min<size_t>(len, 0x10000) + LP_BRIDGE_HDR;
-        u8 *tmp = static_cast<u8 *>(std::malloc(want));
+        u8 *tmp = want <= sizeof(s_buf) ? s_buf : static_cast<u8 *>(std::malloc(want));
         if (tmp == nullptr) {
             R_TRY(serviceMitmDispatchInOut(m_forward_service.get(), 9, in, o,
                 .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out, SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
@@ -257,7 +288,7 @@ namespace ams::mitm::bsd {
             *ret = o.ret; *err = o.err; *addrlen = o.len;
             R_SUCCEED();
         }
-        ON_SCOPE_EXIT { std::free(tmp); };
+        ON_SCOPE_EXIT { if (tmp != s_buf) std::free(tmp); };
 
         u8 from[16] = {};
         R_TRY(serviceMitmDispatchInOut(m_forward_service.get(), 9, in, o,

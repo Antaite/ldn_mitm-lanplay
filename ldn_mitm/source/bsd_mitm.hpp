@@ -10,7 +10,24 @@
 #pragma once
 #include <stratosphere.hpp>
 
+namespace ams::mitm::bsd {
+    /* nn::socket LibraryConfigData: forwarded untouched. */
+    struct LibraryConfigData { u8 raw[0x20]; };
+    static_assert(sizeof(LibraryConfigData) == 0x20);
+}
+
+/* RegisterClient carries the client's pid and a transfer-memory handle: a plain
+ * framework forward loses both (the game aborts in nn::socket::Initialize), so it
+ * is re-sent with Atmosphere's pid override. StartMonitoring (1) must stay
+ * undeclared: its raw-forward is the only shape that matches the real client. */
 #define AMS_LP_BSD_MITM(C, H)                                                                                                    \
+    AMS_SF_METHOD_INFO(C, H, 0,  Result, RegisterClient, (ams::sf::Out<u64> out_result, const ams::mitm::bsd::LibraryConfigData &config, \
+                                                          const ams::sf::ClientProcessId &client_pid, u64 tmem_size,               \
+                                                          ams::sf::CopyHandle &&transfer_memory),                                  \
+                                                         (out_result, config, client_pid, tmem_size, std::move(transfer_memory)))   \
+    AMS_SF_METHOD_INFO(C, H, 33, Result, RegisterClientShared, (ams::sf::Out<u64> out_result, const ams::mitm::bsd::LibraryConfigData &config, \
+                                                          const ams::sf::ClientProcessId &client_pid, u64 tmem_size),              \
+                                                         (out_result, config, client_pid, tmem_size), ams::hos::Version_10_0_0)     \
     AMS_SF_METHOD_INFO(C, H, 2,  Result, Socket,      (ams::sf::Out<s32> out_ret, ams::sf::Out<s32> out_errno, s32 domain, s32 type, s32 protocol), \
                                                       (out_ret, out_errno, domain, type, protocol))                              \
     AMS_SF_METHOD_INFO(C, H, 8,  Result, Recv,        (ams::sf::Out<s32> out_ret, ams::sf::Out<s32> out_errno, s32 fd, s32 flags,             \
@@ -51,6 +68,11 @@ namespace ams::mitm::bsd {
             ~BsdMitmService();
 
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info);
+
+            Result RegisterClient(sf::Out<u64> out_result, const LibraryConfigData &config, const sf::ClientProcessId &client_pid,
+                                  u64 tmem_size, sf::CopyHandle &&transfer_memory);
+            Result RegisterClientShared(sf::Out<u64> out_result, const LibraryConfigData &config, const sf::ClientProcessId &client_pid,
+                                        u64 tmem_size);
 
             Result Socket(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 domain, s32 type, s32 protocol);
             Result Recv(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, s32 flags, sf::OutAutoSelectBuffer buffer);

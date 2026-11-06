@@ -160,17 +160,15 @@ namespace ams {
                 return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info), fsrv);
             }
 
-            /* bsd:u mitm for games in internet mode (their own UDP to 10.13.0.0/16).
-             * Separate manager: a game may hold several bsd sessions and blocking
-             * calls (recv/poll) occupy a thread each while they wait. */
+            /* bsd:u mitm for games in internet mode (their own UDP to 10.13.0.0/16). */
             struct BsdManagerOptions {
                 static constexpr size_t PointerBufferSize = 0x1000;
-                static constexpr size_t MaxDomains = 0;
-                static constexpr size_t MaxDomainObjects = 0;
+                static constexpr size_t MaxDomains = 0x10;
+                static constexpr size_t MaxDomainObjects = 0x100;
                 static constexpr bool   CanDeferInvokeRequest = false;
                 static constexpr bool   CanManageMitmServers  = true;
             };
-            constexpr size_t BsdMaxSessions = 20;
+            constexpr size_t BsdMaxSessions = 32;
 
             class BsdServerManager final : public sf::hipc::ServerManager<1, BsdManagerOptions, BsdMaxSessions> {
                 private:
@@ -187,7 +185,9 @@ namespace ams {
                 return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdMitm, mitm::bsd::BsdMitmService>(decltype(fsrv)(fsrv), client_info), fsrv);
             }
 
-            constexpr size_t BsdThreads = 4;
+            /* One thread: with several, the real bsd service was seen closing a
+             * client's sessions right after RegisterClient (switch-lan-play-nx). */
+            constexpr size_t BsdThreads = 1;
             constexpr size_t BsdThreadStackSize = 0x4000;
             alignas(os::MemoryPageSize) u8 g_bsd_stacks[BsdThreads][BsdThreadStackSize];
             os::ThreadType g_bsd_threads[BsdThreads];

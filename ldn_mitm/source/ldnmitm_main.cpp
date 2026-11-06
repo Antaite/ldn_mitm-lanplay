@@ -138,7 +138,10 @@ namespace ams {
                 static constexpr bool   CanManageMitmServers  = true;
             };
 
-            constexpr size_t MaxSessions = 3;
+            /* A game needs 2-3 sessions (ldn:u + ICommunication [+ client monitor]) and the
+             * Tesla overlay 1 while it is shown; 3 was too few and aborted with
+             * OutOfSessionMemory (0xCC0B) when the game opened local communication. */
+            constexpr size_t MaxSessions = 8;
 
             class ServerManager final : public sf::hipc::ServerManager<1, LdnMitmManagerOptions, MaxSessions> {
                         private:

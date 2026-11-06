@@ -979,6 +979,24 @@ namespace {
 
 }
 
+/* Only the config sub-session is kept, and only while the overlay is shown; the
+ * sysmodule has a small fixed number of IPC sessions that games need too. */
+static void ConnectLdn() {
+    if (g_serviceOk) return;
+    tsl::hlp::doWithSmSession([] {
+        if (R_FAILED(smGetService(&g_ldnSrv, "ldn:u"))) return;
+        const bool ok = R_SUCCEEDED(ldnMitmGetConfigFromService(&g_ldnSrv, &g_ldnConfig));
+        serviceClose(&g_ldnSrv);              /* the config session lives on its own */
+        g_serviceOk = ok;
+    });
+}
+
+static void DisconnectLdn() {
+    if (!g_serviceOk) return;
+    serviceClose(&g_ldnConfig.s);
+    g_serviceOk = false;
+}
+
 class LanPlayOverlay : public tsl::Overlay {
 public:
     void initServices() override {
@@ -990,29 +1008,30 @@ public:
 
         tsl::hlp::doWithSmSession([] {
             g_nsOk = R_SUCCEEDED(nsInitialize());
-            if (R_FAILED(smGetService(&g_ldnSrv, "ldn:u"))) return;
-            if (R_FAILED(ldnMitmGetConfigFromService(&g_ldnSrv, &g_ldnConfig))) return;
-            g_serviceOk = true;
+        });
+        ConnectLdn();
+        if (g_serviceOk) {
             if (R_FAILED(ldnMitmGetVersion(&g_ldnConfig, g_version))) strcpy(g_version, "?");
             lp_status_t st;
             g_lanplayOk = R_SUCCEEDED(ldnMitmGetLanPlayStatus(&g_ldnConfig, &st));
             if (g_lanplayOk) g_status = st;
-        });
+        }
     }
 
     void exitServices() override {
-        if (g_serviceOk) serviceClose(&g_ldnConfig.s);
-        serviceClose(&g_ldnSrv);
+        DisconnectLdn();
         if (g_nsOk) nsExit();
         fsdevUnmountDevice("sdmc");
     }
 
     void onShow() override {
+        ConnectLdn();
         LoadConfig();
         RefreshStatus();
     }
 
-    void onHide() override {}
+    /* Tesla keeps the overlay loaded while hidden: give the sysmodule its session back. */
+    void onHide() override { DisconnectLdn(); }
 
     std::unique_ptr<tsl::Gui> loadInitialGui() override {
         return initially<MainGui>();

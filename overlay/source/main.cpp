@@ -88,6 +88,13 @@ namespace {
 
     bool SaveConfig() {
         static char buf[16384];
+        /* The sysmodule may have changed the virtual IP (conflict on the server): keep its value. */
+        if (g_lanplayOk) {
+            lp_status_t st;
+            if (R_SUCCEEDED(ldnMitmGetLanPlayStatus(&g_ldnConfig, &st)) && lp_ip_is_valid_virtual(st.virt_ip)) {
+                g_cfg.virt_ip = st.virt_ip;
+            }
+        }
         size_t n = lp_config_format(&g_cfg, buf, sizeof(buf));
         if (n == 0) {
             return false;

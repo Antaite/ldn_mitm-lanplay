@@ -11,6 +11,7 @@
 #include <cstring>
 #include "ldn_types.hpp"
 #include "lan_protocol.hpp"
+#include "lanplay_service.hpp"
 
 namespace ams::mitm::ldn {
     const size_t StackSize = 0x4000;
@@ -193,6 +194,7 @@ namespace ams::mitm::ldn {
             };
             void setState(CommState v) {
                 this->state = v;
+                lanplay::SetSessionActive(v == CommState::AccessPointCreated || v == CommState::StationConnected);
                 this->lanEvent();
             };
             int stationCount();

@@ -15,6 +15,15 @@
 
 static int out_cb(const uint8_t *p, size_t n) { return lp_tunnel_send_ipv4(p, n); }
 
+/* Same policy as the sysmodule: in a session (SESSION=1) wait 5 s, otherwise move at once. */
+static int conflict_cb(uint32_t elapsed, uint32_t *ip) {
+    if (getenv("SESSION") && elapsed < 5000) return 0;
+    uint8_t r[2]; lp_random(r, 2);
+    *ip = lp_generate_virtual_ip(r);
+    vnet_configure(*ip, LP_SUBNET_MASK, 1);
+    return 1;
+}
+
 static void wait_connected(void) {
     for (int i = 0; i < 100; i++) {
         lp_status_t s; lp_tunnel_get_status(&s);
@@ -52,7 +61,17 @@ int main(int argc, char **argv) {
     vnet_init(out_cb);
     vnet_configure(ip, LP_SUBNET_MASK, 1);
     lp_tunnel_set_input(vnet_input);
+    lp_tunnel_set_conflict_handler(conflict_cb);
     lp_tunnel_start(&p);
+    if (!strcmp(argv[1], "idle")) {
+        /* lpclient idle server ip seconds : stay connected, then print the final virtual IP */
+        lp_sleep_ms((uint64_t)atoi(argc > 4 ? argv[4] : "10") * 1000);
+        lp_status_t s; lp_tunnel_get_status(&s);
+        char b[16]; lp_ip_to_str(s.virt_ip, b);
+        printf("final ip %s (vnet %s)\n", b, vnet_get_ip() == s.virt_ip ? "same" : "DIFFERENT");
+        lp_tunnel_stop();
+        return 0;
+    }
     if (!strcmp(argv[1], "status")) {
         lp_sleep_ms(4000);
         lp_status_t s; lp_tunnel_get_status(&s);

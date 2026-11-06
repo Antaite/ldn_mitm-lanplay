@@ -53,6 +53,13 @@ enum {
 #define RERESOLVE_MS      30000
 #define INFO_PERIOD_MS    20000
 #define PING_SLOTS        8
+#define SENT_SIGS         32        /* recent own packets, to tell echoes from a real conflict */
+#define PROBE_PERIOD_MS   300000    /* re-announce our IP every 5 min */
+#define PROBE_MIN_GAP_MS  2000
+#define CONFLICT_QUIET_MS 3000      /* no more foreign packets for this long = resolved */
+#define PROBE_PORT        11449
+#define NEWCOMER_MS       15000     /* connected for less than this: we are the one who moves */
+#define SETTLED_GRACE_MS  5000      /* settled clients give the newcomer this long to move */
 
 typedef struct {
     int      used;
@@ -81,10 +88,29 @@ static struct {
     frag_slot_t        frags[FRAG_SLOTS];
     lp_status_t        st;
     lp_ipv4_input_fn   input;
+    lp_ip_conflict_fn  on_conflict;
+    uint8_t            ip_be[4];       /* our virtual IP, network order */
+    uint32_t           sent_sig[SENT_SIGS];
+    uint32_t           sent_idx;
+    uint64_t           conflict_first, conflict_last, last_probe;
+    int                was_connected;
+    uint64_t           connected_at;
     uint8_t            rx[RECV_BUF_LEN];
 } T = { .fd = -1 };
 
 void lp_tunnel_set_input(lp_ipv4_input_fn fn) { T.input = fn; }
+void lp_tunnel_set_conflict_handler(lp_ip_conflict_fn fn) { T.on_conflict = fn; }
+
+static void set_ip(uint32_t ip) {
+    T.p.virt_ip = ip;
+    T.ip_be[0] = (uint8_t)(ip >> 24); T.ip_be[1] = (uint8_t)(ip >> 16);
+    T.ip_be[2] = (uint8_t)(ip >> 8);  T.ip_be[3] = (uint8_t)ip;
+}
+
+/* IP id + header checksum: identifies one of our own packets if the server echoes it. */
+static uint32_t pkt_sig(const uint8_t *pkt) {
+    return (uint32_t)pkt[4] << 24 | (uint32_t)pkt[5] << 16 | (uint32_t)pkt[10] << 8 | pkt[11];
+}
 int  lp_tunnel_running(void) { return T.running; }
 
 static void set_state(uint32_t s) {
@@ -129,6 +155,10 @@ static int send_type(uint8_t type, const void *payload, size_t len) {
 
 int lp_tunnel_send_ipv4(const uint8_t *pkt, size_t len) {
     if (!T.running || len < 20 || len > 1600) return -1;
+    if (!memcmp(pkt + 12, T.ip_be, 4)) {
+        uint32_t i = __atomic_fetch_add(&T.sent_idx, 1, __ATOMIC_RELAXED);
+        T.sent_sig[i % SENT_SIGS] = pkt_sig(pkt);
+    }
     uint32_t pmtu = T.p.pmtu;
     if (pmtu == 0 || len <= pmtu) {
         uint8_t t = T_IPV4;
@@ -154,8 +184,62 @@ int lp_tunnel_send_ipv4(const uint8_t *pkt, size_t len) {
 
 /* -------------------------------------------------------------- receiving */
 
+/* Small UDP broadcast from our IP. Any other client using the same IP sees a packet
+ * "from itself" and knows there is a conflict; it answers with its own probe. */
+static void send_probe(uint64_t now) {
+    static const char tag[] = "LPIPCHK";
+    uint8_t b[20 + 8 + sizeof tag - 1];
+    uint8_t rnd[2]; lp_random(rnd, 2);
+    memset(b, 0, sizeof b);
+    b[0] = 0x45; b[2] = 0; b[3] = sizeof b;
+    b[4] = rnd[0]; b[5] = rnd[1];
+    b[8] = 64; b[9] = 17;
+    memcpy(b + 12, T.ip_be, 4);
+    b[16] = T.ip_be[0]; b[17] = T.ip_be[1]; b[18] = 0xFF; b[19] = 0xFF;
+    uint32_t sum = 0;
+    for (int i = 0; i < 20; i += 2) sum += (uint32_t)(b[i] << 8 | b[i + 1]);
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    sum = ~sum & 0xFFFF;
+    b[10] = (uint8_t)(sum >> 8); b[11] = (uint8_t)sum;
+    b[20] = PROBE_PORT >> 8; b[21] = PROBE_PORT & 0xFF; b[22] = PROBE_PORT >> 8; b[23] = PROBE_PORT & 0xFF;
+    b[25] = 8 + sizeof tag - 1;                                     /* UDP checksum 0 = none */
+    memcpy(b + 28, tag, sizeof tag - 1);
+    T.last_probe = now;
+    lp_tunnel_send_ipv4(b, sizeof b);
+}
+
 static void deliver(const uint8_t *pkt, size_t len) {
-    if (len >= 20 && (pkt[0] >> 4) == 4 && T.input) T.input(pkt, len);
+    if (len < 20 || (pkt[0] >> 4) != 4) return;
+    if (!memcmp(pkt + 12, T.ip_be, 4)) {
+        /* "From us": either the server echoed our own packet, or someone else has our IP. */
+        const uint32_t sig = pkt_sig(pkt);
+        for (int i = 0; i < SENT_SIGS; i++) if (T.sent_sig[i] == sig) return;
+        const uint64_t now = lp_now_ms();
+        if (!T.conflict_first) {
+            T.conflict_first = now;
+            lp_log("lanplay: another client uses our virtual IP");
+        }
+        T.conflict_last = now;
+        if (now - T.last_probe >= PROBE_MIN_GAP_MS) send_probe(now);   /* let the other side notice too */
+        return;
+    }
+    if (T.input) T.input(pkt, len);
+}
+
+static void check_conflict(uint64_t now) {
+    if (!T.conflict_first) return;
+    if (now - T.conflict_last > CONFLICT_QUIET_MS) { T.conflict_first = 0; return; }   /* the other side moved */
+    if (now - T.connected_at >= NEWCOMER_MS && now - T.conflict_first < SETTLED_GRACE_MS) return;
+    uint32_t ip = 0;
+    if (!T.on_conflict || !T.on_conflict((uint32_t)(now - T.conflict_first), &ip) || !lp_ip_is_valid_virtual(ip)) return;
+    char s[16]; lp_ip_to_str(ip, s);
+    lp_log("lanplay: virtual IP changed to %s", s);
+    set_ip(ip);
+    lp_lock();
+    T.st.virt_ip = ip;
+    lp_unlock();
+    T.conflict_first = 0;
+    send_probe(now);
 }
 
 static void on_frag(const uint8_t *p, size_t len) {
@@ -417,6 +501,15 @@ static void tunnel_thread(void *arg) {
                 lp_unlock();
             }
             if (T.st.state != LP_STATE_NO_NETWORK || s == LP_STATE_CONNECTED) set_state(s);
+
+            if (s == LP_STATE_CONNECTED) {
+                if (!T.was_connected) T.connected_at = now;
+                if (!T.was_connected || now - T.last_probe >= PROBE_PERIOD_MS) send_probe(now);
+                T.was_connected = 1;
+                check_conflict(now);
+            } else {
+                T.was_connected = 0;
+            }
         }
 
         struct pollfd pf = { .fd = T.fd, .events = POLLIN };
@@ -436,10 +529,13 @@ static void tunnel_thread(void *arg) {
 int lp_tunnel_start(const lp_tunnel_params_t *params) {
     if (T.running) lp_tunnel_stop();
     lp_ipv4_input_fn input = T.input;
+    lp_ip_conflict_fn on_conflict = T.on_conflict;
     memset(&T, 0, sizeof T);
     T.input = input;
+    T.on_conflict = on_conflict;
     T.fd = -1;
     T.p = *params;
+    set_ip(T.p.virt_ip);
     if (T.p.port == 0) T.p.port = LP_DEFAULT_PORT;
     if (T.p.pmtu && (T.p.pmtu < 500 || T.p.pmtu > 1500)) T.p.pmtu = 0;
     lp_sha1(T.p.pass, strlen(T.p.pass), T.key);

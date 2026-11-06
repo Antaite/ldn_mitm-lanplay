@@ -4,6 +4,7 @@
 #include "ldnmitm_config.hpp"
 #include <cstring>
 #include <cstdlib>
+#include <atomic>
 
 extern "C" {
 #include "lanplay/lp_config.h"
@@ -32,6 +33,10 @@ namespace ams::mitm::ldn::lanplay {
         constinit bool         g_vnet_ready = false;
         constinit u16          g_ams_running[3];
         constinit char         g_file_buf[ConfigMax];
+        constinit std::atomic<bool> g_session_active{false};
+
+        /* While a room is open or joined, give the other side a moment to move first. */
+        constexpr u32 SessionGraceMs = 5000;
 
         int VnetOutput(const uint8_t *pkt, size_t len) {
             return lp_tunnel_send_ipv4(pkt, len);
@@ -76,6 +81,32 @@ namespace ams::mitm::ldn::lanplay {
             R_SUCCEED();
         }
 
+        /* Tunnel thread: someone else on the server has our virtual IP -> pick a new one and save it. */
+        int OnIpConflict(uint32_t elapsed_ms, uint32_t *new_ip) {
+            if (g_session_active.load(std::memory_order_relaxed) && elapsed_ms < SessionGraceMs) {
+                return 0;
+            }
+            /* Never block here: Reload() holds the lock while it joins this thread. */
+            if (!g_lock.TryLock()) {
+                return 0;
+            }
+            ON_SCOPE_EXIT { g_lock.Unlock(); };
+            const u32 old_ip = g_config.virt_ip;
+            u32 ip = old_ip;
+            for (int i = 0; i < 8 && ip == old_ip; i++) {
+                u8 r[2];
+                os::GenerateRandomBytes(r, sizeof(r));
+                ip = lp_generate_virtual_ip(r);
+            }
+            g_config.virt_ip = ip;
+            if (R_FAILED(WriteConfigFile(std::addressof(g_config)))) {
+                LogFormat("lanplay: failed to save new ip");
+            }
+            vnet_configure(ip, LP_SUBNET_MASK, 1);
+            *new_ip = ip;
+            return 1;
+        }
+
         void StopTunnel() {
             if (lp_tunnel_running()) {
                 lp_tunnel_stop();
@@ -104,6 +135,7 @@ namespace ams::mitm::ldn::lanplay {
             if (!g_vnet_ready) {
                 vnet_init(VnetOutput);
                 lp_tunnel_set_input(vnet_input);
+                lp_tunnel_set_conflict_handler(OnIpConflict);
                 g_vnet_ready = true;
             }
 
@@ -163,6 +195,10 @@ namespace ams::mitm::ldn::lanplay {
         R_TRY(WriteConfigFile(std::addressof(g_config)));
         ApplyLocked();
         R_SUCCEED();
+    }
+
+    void SetSessionActive(bool active) {
+        g_session_active.store(active, std::memory_order_relaxed);
     }
 
     u32 GetMode() {

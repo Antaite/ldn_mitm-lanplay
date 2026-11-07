@@ -222,6 +222,11 @@ namespace {
      * expanding to 32 entries). nacpGetLanguageEntry only reads the plain layout,
      * which is why installed games showed up as title IDs. Order: Traditional
      * Chinese, Simplified Chinese, English, then any. */
+    std::string BoundedStr(const char *p, size_t cap) {
+        const void *end = std::memchr(p, 0, cap);
+        return std::string(p, end ? static_cast<const char *>(end) - p : cap);
+    }
+
     std::string PickTitle(const NacpStruct &nacp) {
         static NacpLanguageEntry s_titles[32];
         const NacpLanguageEntry *titles = nacp.lang_data.lang;
@@ -237,10 +242,10 @@ namespace {
         }
         static const int order[] = { 13, 14, 0, 1 };
         for (int li : order) {
-            if (li < count && titles[li].name[0]) return std::string(titles[li].name, strnlen(titles[li].name, sizeof(titles[li].name)));
+            if (li < count && titles[li].name[0]) return BoundedStr(titles[li].name, sizeof(titles[li].name));
         }
         for (int li = 0; li < count; li++) {
-            if (titles[li].name[0]) return std::string(titles[li].name, strnlen(titles[li].name, sizeof(titles[li].name)));
+            if (titles[li].name[0]) return BoundedStr(titles[li].name, sizeof(titles[li].name));
         }
         return {};
     }

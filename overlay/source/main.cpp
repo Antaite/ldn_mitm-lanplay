@@ -72,29 +72,40 @@ namespace {
     void Toast(const std::string &s) {
         g_toast = s;
         g_toastUntil = NowMs() + 2500;
-        tsl::lpRequestRedraw();           /* make sure it is on screen before any blocking call */
     }
 
     /* ------------------------------------------------------------------ config */
 
     bool g_cfgLoaded = false;
-    u32  g_framesSinceShow = 0;
+    u32  g_ipcWorstUs = 0;
+    bool g_logging = false;    /* debug log on: also show panel timing */     /* slowest status call in the last second (debug line) */
     void EnsureLdn();
+    constexpr const char ConfigTmpPath[] = "sdmc:" LP_CONFIG_PATH ".tmp";
+
+    bool ReadConfigFrom(const char *path, lp_config_t *cfg) {
+        FILE *f = fopen(path, "rb");
+        if (f == nullptr) {
+            return false;
+        }
+        static char buf[16384];
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        if (n == 0) {
+            return false;
+        }
+        lp_config_parse(cfg, buf, n);
+        return true;
+    }
 
     void LoadConfig() {
         if (g_cfgLoaded) {
             return;            /* in game the SD card is busy: never re-read it on navigation */
         }
         g_cfgLoaded = true;
-        FILE *f = fopen(ConfigPath, "rb");
-        if (f == nullptr) {
+        /* the .tmp copy is the newest one if a save was cut off before the rename */
+        if (!ReadConfigFrom(ConfigPath, &g_cfg) && !ReadConfigFrom(ConfigTmpPath, &g_cfg)) {
             lp_config_default(&g_cfg);
-            return;
         }
-        static char buf[16384];
-        size_t n = fread(buf, 1, sizeof(buf), f);
-        fclose(f);
-        lp_config_parse(&g_cfg, buf, n);
     }
 
     bool SaveConfig() {
@@ -113,13 +124,19 @@ namespace {
         }
         mkdir("sdmc:/config", 0777);
         mkdir("sdmc:/config/ldn_mitm", 0777);
-        FILE *f = fopen(ConfigPath, "wb");
+        /* write a temporary file first: a failure half way never loses the old settings */
+        FILE *f = fopen(ConfigTmpPath, "wb");
         if (f == nullptr) {
             return false;
         }
         bool ok = fwrite(buf, 1, n, f) == n;
-        fclose(f);
-        return ok;
+        ok = (fclose(f) == 0) && ok;
+        if (!ok) {
+            remove(ConfigTmpPath);
+            return false;
+        }
+        remove(ConfigPath);
+        return rename(ConfigTmpPath, ConfigPath) == 0;
     }
 
     void RefreshStatus() {
@@ -128,9 +145,11 @@ namespace {
             return;
         }
         lp_status_t st;
+        const u64 t0 = armGetSystemTick();
         if (R_SUCCEEDED(ldnMitmGetLanPlayStatus(&g_ldnConfig, &st))) {
             g_status = st;
         }
+        g_ipcWorstUs = static_cast<u32>(armTicksToNs(armGetSystemTick() - t0) / 1000);
     }
 
     /* Save + tell the sysmodule to reload (changes take effect immediately). */
@@ -175,6 +194,7 @@ namespace {
             case LP_STATE_NO_NETWORK:       *color = bad;  return "沒有網路連線";
             case LP_STATE_VERSION_MISMATCH: *color = bad;  return "大氣層版本不符，請換對應版本";
             case LP_STATE_NO_SERVER:        *color = warn; return "尚未設定伺服器";
+            case LP_STATE_STANDBY:          *color = dim;  return "待機中（開啟對戰遊戲後自動連線）";
             default:                        *color = dim;  return "未啟用";
         }
     }
@@ -918,6 +938,43 @@ namespace {
 
     /* ----------------------------------------------------------------- main */
 
+    /* Mode picker: one press never jumps straight to "off" any more. */
+    class ModeGui : public tsl::Gui {
+    public:
+        tsl::elm::Element *createUI() override {
+            auto frame = new tsl::elm::OverlayFrame("對戰模式", "\uE0E0 選擇");
+            auto list = new tsl::elm::List();
+            Add(list, LP_MODE_INTERNET, "網際網路", "隔著網路和朋友對戰（lan-play）");
+            Add(list, LP_MODE_LAN, "同區網", "和同一個 Wi-Fi 底下的 Switch 對戰");
+            Add(list, LP_MODE_OFF, "關閉", "遊戲使用原本的本機無線通訊");
+            frame->setContent(list);
+            return frame;
+        }
+
+        void update() override {
+            ProcessPendingNav();
+        }
+
+    private:
+        static void Add(tsl::elm::List *list, u32 mode, const char *name, const char *desc) {
+            if (mode == LP_MODE_INTERNET && !g_lanplayOk) return;
+            auto it = new tsl::elm::ListItem(name, g_cfg.mode == mode ? "目前" : "");
+            it->setClickListener([mode](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                if (g_cfg.mode != mode) {
+                    g_cfg.mode = mode;
+                    Apply();
+                }
+                g_pendingBack++;
+                return true;
+            });
+            list->addItem(it);
+            list->addItem(new tsl::elm::CustomDrawer([desc](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
+                r->drawString(desc, false, x + 20, y + 18, 15, r->a(tsl::style::color::ColorDescription));
+            }), 28);
+        }
+    };
+
     class MainGui : public tsl::Gui {
     public:
         tsl::elm::Element *createUI() override {
@@ -941,19 +998,24 @@ namespace {
             list->addItem(new tsl::elm::CategoryHeader("狀態"));
             list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
                 DrawStatus(r, x, y, w);
-            }), 205);
+            }), 245);
+
+            if (g_lanplayOk) {
+                auto rooms = new tsl::elm::ListItem("房間列表", "看誰正在開房");
+                rooms->setClickListener([](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    g_roomScanRequested = true;
+                    return true;
+                });
+                list->addItem(rooms);
+            }
 
             list->addItem(new tsl::elm::CategoryHeader("設定"));
 
             m_itMode = new tsl::elm::ListItem("對戰模式", ModeText(g_cfg.mode));
-            m_itMode->setClickListener([this](u64 keys) {
+            m_itMode->setClickListener([](u64 keys) {
                 if (!(keys & HidNpadButton_A)) return false;
-                LoadConfig();
-                u32 next = g_cfg.mode == LP_MODE_OFF ? LP_MODE_LAN : (g_cfg.mode == LP_MODE_LAN ? LP_MODE_INTERNET : LP_MODE_OFF);
-                if (next == LP_MODE_INTERNET && !g_lanplayOk) next = LP_MODE_OFF;
-                g_cfg.mode = next;
-                Apply();
-                m_itMode->setValue(ModeText(g_cfg.mode));
+                tsl::changeTo<ModeGui>();
                 return true;
             });
             list->addItem(m_itMode);
@@ -967,17 +1029,6 @@ namespace {
                 });
                 list->addItem(m_itServer);
 
-            }
-
-            if (g_lanplayOk) {
-                auto rooms = new tsl::elm::ListItem("房間列表", "看誰正在開房");
-                rooms->setClickListener([](u64 keys) {
-                    if (!(keys & HidNpadButton_A)) return false;
-                    g_roomScanRequested = true;
-                    return true;
-                });
-                list->addItem(rooms);
-
                 auto reconnect = new tsl::elm::ListItem("重新連線");
                 reconnect->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
@@ -990,13 +1041,18 @@ namespace {
 
             u32 logging = 0;
             ldnMitmGetLogging(&g_ldnConfig, &logging);
-            auto log = new tsl::elm::ToggleListItem("除錯紀錄", logging != 0, "開", "關");
-            log->setStateChangedListener([](bool on) { EnsureLdn(); ldnMitmSetLogging(&g_ldnConfig, on); });
+            g_logging = logging != 0;
+            auto log = new tsl::elm::ToggleListItem("除錯紀錄", g_logging, "開", "關");
+            log->setStateChangedListener([](bool on) {
+                EnsureLdn();
+                g_logging = on && R_SUCCEEDED(ldnMitmSetLogging(&g_ldnConfig, on));
+                if (on && !g_logging) Toast("無法寫入 SD 卡，紀錄維持關閉");
+            });
             list->addItem(log);
 
             list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
-                r->drawString("切換模式或伺服器後，請在遊戲裡重新進入\n「本地通訊／區域連線」畫面才會生效。\n網際網路模式：大家選同一台伺服器就能同房。", false, x + 5, y + 22, 15, r->a(tsl::style::color::ColorDescription));
-            }), 75);
+                r->drawString("切換模式或伺服器後，請在遊戲裡重新進入\n「本地通訊／區域連線」畫面才會生效。\n網際網路模式：大家選同一台伺服器就能同房；\n沒在玩對戰遊戲時會自動待機，不佔資源。", false, x + 5, y + 22, 15, r->a(tsl::style::color::ColorDescription));
+            }), 95);
 
             frame->setContent(list);
             return frame;
@@ -1032,11 +1088,7 @@ namespace {
                 tsl::changeTo<RoomListGui>();
                 return;
             }
-            if (g_framesSinceShow < 2) {       /* draw the panel first, talk to the sysmodule after */
-                g_framesSinceShow++;
-                return;
-            }
-            if (m_tick++ % 60 == 0) {   /* once per second */
+            if (m_tick++ % 30 == 0) {   /* twice per second */
                 RefreshStatus();
                 if (m_itMode) m_itMode->setValue(ModeText(g_cfg.mode));
                 if (m_itServer) {
@@ -1097,6 +1149,20 @@ namespace {
                          g_status.ams_running[0], g_status.ams_running[1], g_status.ams_running[2]);
                 r->drawString(line, false, x + 5, ly, 14, r->a(tsl::Color(0xF, 0xC, 0x0, 0xF)), w - 10);
                 ly += 20;
+            }
+
+            if (g_cfg.mode == LP_MODE_INTERNET && g_status.relaunch_tid != 0) {
+                snprintf(line, sizeof(line), "請關閉「%s」再重開一次，才能網路對戰", GameName(g_status.relaunch_tid).c_str());
+                r->drawString(line, false, x + 5, ly, 15, r->a(tsl::Color(0xF, 0xC, 0x0, 0xF)), w - 10);
+                ly += 20;
+            }
+
+            if (g_logging) {
+                const auto &t = tsl::g_lpTiming;
+                snprintf(line, sizeof(line), "效能：更新 %.1f ms／繪製 %.1f ms，最慢 %.1f ms，查詢 %.1f ms",
+                         t.update_avg_us / 1000.0, t.draw_avg_us / 1000.0, t.worst_us / 1000.0, g_ipcWorstUs / 1000.0);
+                r->drawString(line, false, x + 5, ly, 13, desc, w - 10);
+                ly += 18;
             }
 
             if (!g_toast.empty() && NowMs() < g_toastUntil) {
@@ -1160,7 +1226,8 @@ public:
     }
 
     void onShow() override {
-        g_framesSinceShow = 0;   /* connect + refresh after the first frames are on screen */
+        ConnectLdn();
+        RefreshStatus();
     }
 
     /* Tesla keeps the overlay loaded while hidden: give the sysmodule its session back. */

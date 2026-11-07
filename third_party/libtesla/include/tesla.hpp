@@ -75,13 +75,19 @@ using namespace std::literals::chrono_literals;
 
 namespace tsl {
 
-    /* ldn_mitm-lanplay: idle render throttling. Frames left at full rate; any input,
-     * a fade or lpRequestRedraw() refills it. Otherwise the panel redraws 15x/s. */
-    inline u32 g_lpActiveFrames = 30;
-    inline void lpRequestRedraw(u32 frames = 4) {
-        if (g_lpActiveFrames < frames) g_lpActiveFrames = frames;
+    /* ldn_mitm-lanplay: per-frame timing of the panel, summed over 60 frames. */
+    struct LpFrameTiming { u32 update_avg_us, draw_avg_us, worst_us; };
+    inline LpFrameTiming g_lpTiming = {};
+    inline void lpFrameStats(u64 update_us, u64 draw_us) {
+        static u64 s_upd = 0, s_drw = 0, s_worst = 0;
+        static u32 s_n = 0;
+        s_upd += update_us; s_drw += draw_us;
+        if (update_us + draw_us > s_worst) s_worst = update_us + draw_us;
+        if (++s_n == 60) {
+            g_lpTiming = { static_cast<u32>(s_upd / 60), static_cast<u32>(s_drw / 60), static_cast<u32>(s_worst) };
+            s_upd = s_drw = s_worst = 0; s_n = 0;
+        }
     }
-
 
     // Constants
 
@@ -1372,9 +1378,7 @@ namespace tsl {
              */
             virtual void drawHighlight(gfx::Renderer *renderer) {
                 static float counter = 0;
-                /* ldn_mitm-lanplay: steady highlight instead of a pulse, so idle frame
-                 * throttling never makes it look choppy */
-                const float progress = 0.75F;
+                const float progress = (std::sin(counter) + 1) / 2;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
                                                 static_cast<u8>((0x8 - 0xF) * progress + 0xF),
                                                 static_cast<u8>((0xC - 0xF) * progress + 0xF),
@@ -2031,23 +2035,22 @@ namespace tsl {
 
                         return oldFocus;
                     } else if (direction == FocusDirection::Up) {
-                        if (this->m_focusedIndex > 0) {
+                        for (s32 i = static_cast<s32>(this->m_focusedIndex) - 1; i >= 0; i--) {
+                            if (static_cast<size_t>(i) >= this->m_items.size() || this->m_items[i] == nullptr)
+                                continue;
+                            newFocus = this->m_items[i]->requestFocus(oldFocus, direction);
 
-                            for (u16 i = this->m_focusedIndex - 1; i >= 0; i--) {
-                                if (i > this->m_items.size() || this->m_items[i] == nullptr)
-                                    return oldFocus;
-                                else
-                                    newFocus = this->m_items[i]->requestFocus(oldFocus, direction);
+                            if (newFocus != nullptr && newFocus != oldFocus) {
+                                this->m_focusedIndex = i;
 
-                                if (newFocus != nullptr && newFocus != oldFocus) {
-                                    this->m_focusedIndex = i;
-
-                                    this->updateScrollOffset();
-                                    return newFocus;
-                                }
+                                this->updateScrollOffset();
+                                return newFocus;
                             }
                         }
 
+                        /* ldn_mitm-lanplay: nothing focusable above (status/info drawers):
+                         * D-pad Up scrolls to the very top so they become visible. */
+                        this->m_nextOffset = 0;
                         return oldFocus;
                     }
                 }
@@ -2524,9 +2527,7 @@ namespace tsl {
 
             virtual void drawHighlight(gfx::Renderer *renderer) override {
                 static float counter = 0;
-                /* ldn_mitm-lanplay: steady highlight instead of a pulse, so idle frame
-                 * throttling never makes it look choppy */
-                const float progress = 0.75F;
+                const float progress = (std::sin(counter) + 1) / 2;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
                                                 static_cast<u8>((0x8 - 0xF) * progress + 0xF),
                                                 static_cast<u8>((0xC - 0xF) * progress + 0xF),
@@ -3101,25 +3102,18 @@ namespace tsl {
         void loop() {
             auto& renderer = gfx::Renderer::get();
 
-            /* ldn_mitm-lanplay: the panel shares the CPU with the running game; redrawing
-             * an unchanged screen 60x per second made it stutter. Full rate while the user
-             * interacts or something fades, 15x per second otherwise (input stays 60 Hz). */
-            static u32 s_frame = 0;
+            renderer.startFrame();
 
+            /* ldn_mitm-lanplay: measure the panel's own work (not the vsync wait). */
+            const u64 t0 = armGetSystemTick();
             this->animationLoop();
             this->getCurrentGui()->update();
-
-            /* after update(): a toast it requested must reach the screen this frame */
-            const bool active = g_lpActiveFrames > 0 || this->fadeAnimationPlaying();
-            if (g_lpActiveFrames > 0) g_lpActiveFrames--;
-            if (!active && (s_frame++ & 3) != 0) {
-                svcSleepThread(16'666'667);
-                return;
-            }
-
-            renderer.startFrame();
+            const u64 t1 = armGetSystemTick();
             this->getCurrentGui()->draw(&renderer);
+            const u64 t2 = armGetSystemTick();
+
             renderer.endFrame();
+            lpFrameStats(armTicksToNs(t1 - t0) / 1000, armTicksToNs(t2 - t1) / 1000);
         }
 
         /**
@@ -3133,7 +3127,6 @@ namespace tsl {
          * @return Weather or not the input has been consumed
          */
         void handleInput(u64 keysDown, u64 keysHeld, bool touchDetected, const HidTouchState &touchPos, HidAnalogStickState joyStickPosLeft, HidAnalogStickState joyStickPosRight) {
-            if (keysDown || keysHeld || touchDetected) lpRequestRedraw(30);   /* ldn_mitm-lanplay */
             static HidTouchState initialTouchPos = { 0 };
             static HidTouchState oldTouchPos = { 0 };
             static bool oldTouchDetected = false;
@@ -3591,7 +3584,6 @@ namespace tsl {
 
             overlay->show();
             overlay->clearScreen();
-            g_lpActiveFrames = 30;   /* ldn_mitm-lanplay: smooth fade-in */
 
 
             while (shData.running) {

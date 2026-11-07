@@ -14,7 +14,8 @@ namespace {
     using namespace ams;
 
     constexpr size_t StackSizes[LP_THREAD_COUNT] = { 0x4000, 0x3000, 0x3000 };
-    constexpr s32    Priorities[LP_THREAD_COUNT] = { 0x14, 0x16, 0x15 };
+    /* Tunnel and bridge carry game traffic; the info poll is background work. */
+    constexpr s32    Priorities[LP_THREAD_COUNT] = { 0x14, 0x1F, 0x15 };
     constexpr const char *Names[LP_THREAD_COUNT] = { "lanplay::Tunnel", "lanplay::Info", "lanplay::Bridge" };
 
     alignas(os::ThreadStackAlignment) constinit u8 g_stack_tunnel[0x4000];

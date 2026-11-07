@@ -22,8 +22,19 @@ namespace ams::mitm::ldn::lanplay {
 
     /* Effective mode (lp_mode_t). */
     u32  GetMode();
-    /* True when the virtual (internet) network should be used for new sessions. */
+    /* True when the virtual (internet) network should be used and the tunnel is up. */
     bool UseVirtualNetwork();
+    /* Internet mode is selected and usable (tunnel may still be in standby). */
+    bool InternetEnabled();
+
+    /* Standby: the tunnel runs only while a game uses local play, plus a grace period. */
+    bool AcquireGame();          /* false = not in internet mode; waits briefly for the server */
+    void ReleaseGame();
+    void TouchPanel(bool wait);  /* the overlay is looking: stay connected for a minute */
+
+    /* A game used local play but its sockets were not intercepted: it must be restarted once. */
+    void SetRelaunchNeeded(u64 program_id);
+    u64  GetRelaunchNeeded();
     /* LDN state hook: true while a room is open (host) or joined (station). */
     void SetSessionActive(bool active);
     bool IsSessionActive();

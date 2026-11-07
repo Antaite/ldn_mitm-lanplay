@@ -94,4 +94,7 @@ namespace ams::mitm::bsd {
     };
     static_assert(ams::mitm::bsd::IsIBsdMitm<BsdMitmService>);
 
+    /* The game's bsd:u session goes through us (decided when the game started). */
+    bool IsIntercepted(u64 pid);
+
 }

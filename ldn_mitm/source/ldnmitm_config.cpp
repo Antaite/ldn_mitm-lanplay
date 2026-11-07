@@ -40,6 +40,7 @@ namespace ams::mitm::ldn {
         /* 0x100 bytes do not fit in the IPC message as raw data, so this goes through a buffer. */
         static_assert(sizeof(LanPlayStatusRaw) == sizeof(lp_status_t));
         R_UNLESS(status.GetSize() >= sizeof(lp_status_t), MAKERESULT(0xFD, 95));
+        lanplay::TouchPanel(false);
         lp_status_t st;
         std::memset(std::addressof(st), 0, sizeof(st));
         lanplay::GetStatus(std::addressof(st));
@@ -59,6 +60,9 @@ namespace ams::mitm::ldn {
     Result LdnConfig::ScanRooms(sf::Out<u32> count, const sf::OutBuffer &rooms) {
         const size_t max = std::min<size_t>(rooms.GetSize() / sizeof(lp_room_t), LP_ROOM_MAX);
         u32 n = 0;
+        if (lanplay::GetMode() == LP_MODE_INTERNET) {
+            lanplay::TouchPanel(true);
+        }
         Result rc = rooms::Scan(reinterpret_cast<lp_room_t *>(rooms.GetPointer()), max, std::addressof(n));
         count.SetValue(n);
         return rc;

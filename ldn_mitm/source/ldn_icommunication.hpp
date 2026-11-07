@@ -29,8 +29,9 @@ namespace ams::mitm::ldn {
             LANDiscovery lanDiscovery;
             os::SystemEvent *state_event;
             u64 error_state;
+            u64 program_id;
         public:
-            ICommunicationService() : state_event(nullptr), error_state(0) {
+            explicit ICommunicationService(u64 program_id = 0) : state_event(nullptr), error_state(0), program_id(program_id) {
                 LogFormat("ICommunicationService");
                 /* ... */
             };

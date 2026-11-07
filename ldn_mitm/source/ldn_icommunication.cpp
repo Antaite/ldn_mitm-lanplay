@@ -1,5 +1,9 @@
 #include "ldn_icommunication.hpp"
 #include "net_backend.hpp"
+#include "ldn_games.hpp"
+#include "bsd_mitm.hpp"
+#include "lanplay_service.hpp"
+#include <cinttypes>
 #include <arpa/inet.h>
 
 namespace ams::mitm::ldn {
@@ -20,6 +24,18 @@ namespace ams::mitm::ldn {
         R_TRY(lanDiscovery.initialize([&](){
             this->onEventFired();
         }));
+
+        /* Internet mode needs the game's own sockets too (bsd:u mitm), and that is decided
+         * when the game starts: a game seen here for the first time works after a restart. */
+        if (lanDiscovery.isVirtual() && ncm::IsApplicationId(ncm::ProgramId{this->program_id})) {
+            const bool learned = games::Learn(this->program_id);
+            if (learned || !bsd::IsIntercepted(client_process_id.process_id.value)) {
+                LogFormat("game %016" PRIx64 " must be restarted once for internet play", this->program_id);
+                lanplay::SetRelaunchNeeded(this->program_id);
+            } else if (lanplay::GetRelaunchNeeded() == this->program_id) {
+                lanplay::SetRelaunchNeeded(0);
+            }
+        }
 
         return ResultSuccess();
     }

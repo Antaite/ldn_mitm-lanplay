@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "bsd_mitm.hpp"
 #include "lanplay_service.hpp"
+#include "ldn_games.hpp"
 #include "debug.hpp"
 #include "lanplay/lp_bridge.h"
 #include "lanplay/vnet.h"
@@ -44,12 +45,12 @@ namespace ams::mitm::bsd {
         }
 
         /* ---- first bsd:u session of a launch is a dummy that must not be intercepted ---- */
-        struct PidEntry { u64 pid; bool dummy_skipped; u32 live; };
+        struct PidEntry { u64 pid; bool dummy_skipped; u32 live; bool intercepted; };
         constinit PidEntry g_pids[8] = {};
         constinit os::SdkMutex g_pid_lock;
 
         bool Active() {
-            return ldn::lanplay::UseVirtualNetwork();
+            return ldn::lanplay::InternetEnabled();   /* also in standby: the tunnel wakes when the game starts local play */
         }
 
         bool ParseAddr(const u8 *a, size_t len, u32 *ip, u16 *port) {
@@ -111,21 +112,32 @@ namespace ams::mitm::bsd {
         if (!ncm::IsApplicationId(c.program_id) || !Active()) {
             return false;
         }
+        /* Games without local play keep talking to bsd directly: no extra hop for them. */
+        if (!ldn::games::IsKnown(c.program_id.value)) {
+            return false;
+        }
         std::scoped_lock lk(g_pid_lock);
         PidEntry *e = nullptr;
         for (auto &p : g_pids) if (p.pid == c.process_id.value) { e = std::addressof(p); break; }
         if (e == nullptr) {
             for (auto &p : g_pids) if (p.pid == 0 || p.live == 0) { e = std::addressof(p); break; }
             if (e == nullptr) return false;
-            *e = { c.process_id.value, false, 0 };
+            *e = { c.process_id.value, false, 0, false };
         }
         if (!e->dummy_skipped) {
             e->dummy_skipped = true;
             LogFormat("bsd: pid %" PRIu64 " %016" PRIx64 " first session passed through", c.process_id.value, c.program_id.value);
             return false;
         }
+        e->intercepted = true;
         LogFormat("bsd: pid %" PRIu64 " %016" PRIx64 " session intercepted", c.process_id.value, c.program_id.value);
         return true;
+    }
+
+    bool IsIntercepted(u64 pid) {
+        std::scoped_lock lk(g_pid_lock);
+        for (const auto &e : g_pids) if (e.pid == pid && e.intercepted) return true;
+        return false;
     }
 
     Result BsdMitmService::RegisterClient(sf::Out<u64> out_result, const LibraryConfigData &config, const sf::ClientProcessId &client_pid,

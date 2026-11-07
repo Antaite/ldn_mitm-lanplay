@@ -55,6 +55,7 @@ typedef enum {
     LP_STATE_NO_NETWORK     = 8,
     LP_STATE_VERSION_MISMATCH = 9,
     LP_STATE_NO_SERVER      = 10,
+    LP_STATE_STANDBY        = 11,   /* internet mode, no game using local play: not connected */
 } lp_state_t;
 
 /* Fixed 0x100 byte POD, sent as-is over IPC. */
@@ -75,7 +76,8 @@ typedef struct {
     uint32_t down_packets;
     char     server_msg[96];
     char     version[32];
-    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8];
+    uint64_t relaunch_tid;     /* game that must be restarted once before it can play online, 0 = none */
+    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8 - 8];
 } lp_status_t;
 
 /* Server probe (overlay server list). */

@@ -54,7 +54,6 @@ namespace ams::mitm::ldn {
     }
 
     int LDUdpSocket::onRead() {
-        LogFormat("LDUdpSocket::onRead");
         return this->recvPacket([&](LANPacketType type, const void *data, size_t size, ReplyFunc reply) -> int {
             switch (type) {
                 case LANPacketType::Scan: {
@@ -64,7 +63,6 @@ namespace ams::mitm::ldn {
                     break;
                 }
                 case LANPacketType::ScanResp: {
-                    LogFormat("ScanResp");
                     NetworkInfo *info = (decltype(info))data;
                     if (size != sizeof(*info)) {
                         break;
@@ -88,13 +86,11 @@ namespace ams::mitm::ldn {
     };
 
     int LDTcpSocket::onRead() {
-        LogFormat("LDTcpSocket::onRead");
         const auto state = this->discovery->getState();
         if (state == CommState::Station || state == CommState::StationConnected) {
             return this->recvPacket([&](LANPacketType type, const void *data, size_t size, ReplyFunc reply) -> int {
 				AMS_UNUSED(reply);
                 if (type == LANPacketType::SyncNetwork) {
-                    LogFormat("SyncNetwork");
                     NetworkInfo *info = (decltype(info))data;
                     if (size != sizeof(*info)) {
                         return -1;
@@ -742,6 +738,7 @@ namespace ams::mitm::ldn {
             this->tcp.reset();
             this->resetStations();
             this->initialized = false;
+            this->releaseGame();
 
             rc = nifmRequestCancel(&request);
             if (R_FAILED(rc))
@@ -773,9 +770,6 @@ namespace ams::mitm::ldn {
         {
             return 0;
         }
-
-        this->virt = lanplay::UseVirtualNetwork();
-        LogFormat("LANDiscovery::initialize network: %s", this->virt ? "lan-play (internet)" : "local");
 
         NifmNetworkProfileData networkProfile;
         Result rc = nifmGetCurrentNetworkProfile(&networkProfile);
@@ -822,15 +816,23 @@ namespace ams::mitm::ldn {
         }
 
         this->lanEvent = lanEvent;
+
+        /* Internet mode: wakes the tunnel from standby (and waits briefly for the server). */
+        this->virt = lanplay::AcquireGame();
+        LogFormat("LANDiscovery::initialize network: %s", this->virt ? "lan-play (internet)" : "local");
+
         rc = this->initUdp(listening);
         if (R_FAILED(rc)) {
             LogFormat("initUdp %x", rc);
+            this->releaseGame();
             return rc;
         }
 
         rc = os::CreateThread(&this->workerThread, &Worker, this, reinterpret_cast<void *>(util::AlignUp(reinterpret_cast<uintptr_t>(stack.get()), os::ThreadStackAlignment)), StackSize, 0x15, 2);
         if (R_FAILED(rc)) {
             LogFormat("LANDiscovery Failed to threadCreate: %x", rc);
+            this->udp.reset();
+            this->releaseGame();
             return 0xF601;
         }
 

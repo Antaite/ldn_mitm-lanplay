@@ -193,6 +193,12 @@ namespace ams::mitm::ldn {
             bool isVirtual() const {
                 return this->virt;
             }
+            void releaseGame() {
+                if (this->virt) {
+                    this->virt = false;
+                    lanplay::ReleaseGame();
+                }
+            }
             CommState getState() const {
                 return this->state;
             };

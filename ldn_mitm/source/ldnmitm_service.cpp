@@ -34,7 +34,7 @@ namespace ams::mitm::ldn {
         LogFormat("CreateUserLocalCommunicationService: enabled %d", static_cast<u32>(LdnConfig::getEnabled()));
 
         if (LdnConfig::getEnabled()) {
-            out.SetValue(sf::CreateSharedObjectEmplaced<ICommunicationInterface, ICommunicationService>());
+            out.SetValue(sf::CreateSharedObjectEmplaced<ICommunicationInterface, ICommunicationService>(m_client_info.program_id.value));
             return 0;
         }
 

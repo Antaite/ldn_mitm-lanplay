@@ -412,7 +412,12 @@ static void info_thread(void *arg) {
         int rc = connect(fd, (struct sockaddr *)&a, sizeof a);
         if (rc == 0 || errno == EINPROGRESS) {
             struct pollfd pf = { .fd = fd, .events = POLLOUT };
-            if (rc == 0 || poll(&pf, 1, 2500) == 1) {
+            int ready = rc == 0;
+            for (int w = 0; !ready && w < 10 && T.running; w++) {   /* 2.5 s, but stop quickly */
+                pf.revents = 0;
+                ready = poll(&pf, 1, 250) == 1;
+            }
+            if (ready) {
                 int err = 0; socklen_t el = sizeof err;
                 getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
                 if (err == 0) {

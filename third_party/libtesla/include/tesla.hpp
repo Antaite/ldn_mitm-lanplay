@@ -75,6 +75,14 @@ using namespace std::literals::chrono_literals;
 
 namespace tsl {
 
+    /* ldn_mitm-lanplay: idle render throttling. Frames left at full rate; any input,
+     * a fade or lpRequestRedraw() refills it. Otherwise the panel redraws 15x/s. */
+    inline u32 g_lpActiveFrames = 30;
+    inline void lpRequestRedraw(u32 frames = 4) {
+        if (g_lpActiveFrames < frames) g_lpActiveFrames = frames;
+    }
+
+
     // Constants
 
     namespace cfg {
@@ -1364,7 +1372,9 @@ namespace tsl {
              */
             virtual void drawHighlight(gfx::Renderer *renderer) {
                 static float counter = 0;
-                const float progress = (std::sin(counter) + 1) / 2;
+                /* ldn_mitm-lanplay: steady highlight instead of a pulse, so idle frame
+                 * throttling never makes it look choppy */
+                const float progress = 0.75F;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
                                                 static_cast<u8>((0x8 - 0xF) * progress + 0xF),
                                                 static_cast<u8>((0xC - 0xF) * progress + 0xF),
@@ -2514,7 +2524,9 @@ namespace tsl {
 
             virtual void drawHighlight(gfx::Renderer *renderer) override {
                 static float counter = 0;
-                const float progress = (std::sin(counter) + 1) / 2;
+                /* ldn_mitm-lanplay: steady highlight instead of a pulse, so idle frame
+                 * throttling never makes it look choppy */
+                const float progress = 0.75F;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
                                                 static_cast<u8>((0x8 - 0xF) * progress + 0xF),
                                                 static_cast<u8>((0xC - 0xF) * progress + 0xF),
@@ -3089,12 +3101,24 @@ namespace tsl {
         void loop() {
             auto& renderer = gfx::Renderer::get();
 
-            renderer.startFrame();
+            /* ldn_mitm-lanplay: the panel shares the CPU with the running game; redrawing
+             * an unchanged screen 60x per second made it stutter. Full rate while the user
+             * interacts or something fades, 15x per second otherwise (input stays 60 Hz). */
+            static u32 s_frame = 0;
 
             this->animationLoop();
             this->getCurrentGui()->update();
-            this->getCurrentGui()->draw(&renderer);
 
+            /* after update(): a toast it requested must reach the screen this frame */
+            const bool active = g_lpActiveFrames > 0 || this->fadeAnimationPlaying();
+            if (g_lpActiveFrames > 0) g_lpActiveFrames--;
+            if (!active && (s_frame++ & 3) != 0) {
+                svcSleepThread(16'666'667);
+                return;
+            }
+
+            renderer.startFrame();
+            this->getCurrentGui()->draw(&renderer);
             renderer.endFrame();
         }
 
@@ -3109,6 +3133,7 @@ namespace tsl {
          * @return Weather or not the input has been consumed
          */
         void handleInput(u64 keysDown, u64 keysHeld, bool touchDetected, const HidTouchState &touchPos, HidAnalogStickState joyStickPosLeft, HidAnalogStickState joyStickPosRight) {
+            if (keysDown || keysHeld || touchDetected) lpRequestRedraw(30);   /* ldn_mitm-lanplay */
             static HidTouchState initialTouchPos = { 0 };
             static HidTouchState oldTouchPos = { 0 };
             static bool oldTouchDetected = false;
@@ -3566,6 +3591,7 @@ namespace tsl {
 
             overlay->show();
             overlay->clearScreen();
+            g_lpActiveFrames = 30;   /* ldn_mitm-lanplay: smooth fade-in */
 
 
             while (shData.running) {

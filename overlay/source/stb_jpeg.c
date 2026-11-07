@@ -5,4 +5,5 @@
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
 #define STBI_NO_FAILURE_STRINGS
+#define STBI_SUPPORT_ZLIB        /* raw DEFLATE: compressed NACP titles (FW 21+) */
 #include "../../third_party/stb/stb_image.h"

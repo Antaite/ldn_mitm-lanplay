@@ -72,11 +72,20 @@ namespace {
     void Toast(const std::string &s) {
         g_toast = s;
         g_toastUntil = NowMs() + 2500;
+        tsl::lpRequestRedraw();           /* make sure it is on screen before any blocking call */
     }
 
     /* ------------------------------------------------------------------ config */
 
+    bool g_cfgLoaded = false;
+    u32  g_framesSinceShow = 0;
+    void EnsureLdn();
+
     void LoadConfig() {
+        if (g_cfgLoaded) {
+            return;            /* in game the SD card is busy: never re-read it on navigation */
+        }
+        g_cfgLoaded = true;
         FILE *f = fopen(ConfigPath, "rb");
         if (f == nullptr) {
             lp_config_default(&g_cfg);
@@ -91,6 +100,7 @@ namespace {
     bool SaveConfig() {
         static char buf[16384];
         /* The sysmodule may have changed the virtual IP (conflict on the server): keep its value. */
+        EnsureLdn();
         if (g_lanplayOk) {
             lp_status_t st;
             if (R_SUCCEEDED(ldnMitmGetLanPlayStatus(&g_ldnConfig, &st)) && lp_ip_is_valid_virtual(st.virt_ip)) {
@@ -113,6 +123,7 @@ namespace {
     }
 
     void RefreshStatus() {
+        EnsureLdn();
         if (!g_lanplayOk) {
             return;
         }
@@ -124,6 +135,7 @@ namespace {
 
     /* Save + tell the sysmodule to reload (changes take effect immediately). */
     void Apply() {
+        EnsureLdn();
         if (!SaveConfig()) {
             Toast("無法寫入設定檔");
             return;
@@ -206,6 +218,33 @@ namespace {
         stbi_image_free(px);
     }
 
+    /* Titles: FW 21+ games may store them DEFLATE-compressed (titles_data_format 1,
+     * expanding to 32 entries). nacpGetLanguageEntry only reads the plain layout,
+     * which is why installed games showed up as title IDs. Order: Traditional
+     * Chinese, Simplified Chinese, English, then any. */
+    std::string PickTitle(const NacpStruct &nacp) {
+        static NacpLanguageEntry s_titles[32];
+        const NacpLanguageEntry *titles = nacp.lang_data.lang;
+        int count = 16;
+        if (nacp.titles_data_format == 1) {
+            const auto &c = nacp.lang_data.compressed_data;
+            const int in = std::min<int>(c.buffer_size, sizeof(c.buffer));
+            const int out = stbi_zlib_decode_noheader_buffer(reinterpret_cast<char *>(s_titles), sizeof(s_titles),
+                                                             reinterpret_cast<const char *>(c.buffer), in);
+            if (out <= 0) return {};
+            titles = s_titles;
+            count = std::min<int>(32, out / static_cast<int>(sizeof(NacpLanguageEntry)));
+        }
+        static const int order[] = { 13, 14, 0, 1 };
+        for (int li : order) {
+            if (li < count && titles[li].name[0]) return std::string(titles[li].name, strnlen(titles[li].name, sizeof(titles[li].name)));
+        }
+        for (int li = 0; li < count; li++) {
+            if (titles[li].name[0]) return std::string(titles[li].name, strnlen(titles[li].name, sizeof(titles[li].name)));
+        }
+        return {};
+    }
+
     const GameInfo &Game(u64 id) {
         auto it = g_games.find(id);
         if (it != g_games.end()) {
@@ -219,10 +258,7 @@ namespace {
             for (auto src : sources) {
                 u64 size = 0;
                 if (R_FAILED(nsGetApplicationControlData(src, id, data, sizeof(*data), &size)) || size < sizeof(data->nacp)) continue;
-                NacpLanguageEntry *lang = nullptr;
-                if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &lang)) && lang != nullptr && lang->name[0]) {
-                    gi.name = lang->name;
-                }
+                gi.name = PickTitle(data->nacp);
                 gi.version = data->nacp.display_version;
                 if (size > sizeof(data->nacp) && g_iconCount < MaxIcons) {
                     DecodeIcon(data->icon, size - sizeof(data->nacp), gi.icon);
@@ -244,6 +280,7 @@ namespace {
     }
 
     void DoProbe() {
+        EnsureLdn();
         static lp_probe_target_t t[LP_PROBE_MAX];
         int n = 0;
         for (int i = 0; i < g_cfg.count && n < LP_PROBE_MAX; i++, n++) {
@@ -256,6 +293,7 @@ namespace {
     }
 
     void DoPublicProbe() {
+        EnsureLdn();
         static lp_probe_target_t t[LP_PROBE_MAX];
         int n = 0;
         for (int i = 0; i < lp_preset_count && n < LP_PROBE_MAX; i++, n++) {
@@ -291,6 +329,7 @@ namespace {
     }
 
     void DoRoomScan() {
+        EnsureLdn();
         g_roomCount = 0;
         g_roomResult = ldnMitmScanRooms(&g_ldnConfig, g_rooms, sizeof(g_rooms), &g_roomCount);
         if (g_roomCount > LP_ROOM_MAX) g_roomCount = LP_ROOM_MAX;
@@ -791,11 +830,11 @@ namespace {
                 for (u32 i = 0; i < g_roomCount; i++) {
                     const lp_room_t room = g_rooms[i];
                     char cnt[48];
-                    snprintf(cnt, sizeof(cnt), "%u/%u 人%s", room.node_count, room.node_max, room.is_own ? "（你的房間）" : "");
+                    snprintf(cnt, sizeof(cnt), "%u/%u 人", room.node_count, room.node_max);
                     auto item = new tsl::elm::ListItem(GameName(room.local_comm_id), cnt);
                     list->addItem(item);
 
-                    std::string host = std::string("房主：") + (room.players[0][0] ? room.players[0] : "?");
+                    std::string host = std::string("房主：") + (room.players[0][0] ? room.players[0] : "?") + (room.is_own ? "（你的房間）" : "");
                     std::string members;
                     for (int p = 1; p < LP_ROOM_PLAYERS; p++) {
                         if (!room.players[p][0]) continue;
@@ -937,6 +976,7 @@ namespace {
                 auto reconnect = new tsl::elm::ListItem("重新連線");
                 reconnect->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
+                    EnsureLdn();
                     if (R_SUCCEEDED(ldnMitmReloadLanPlayConfig(&g_ldnConfig))) Toast("重新連線中…");
                     return true;
                 });
@@ -946,7 +986,7 @@ namespace {
             u32 logging = 0;
             ldnMitmGetLogging(&g_ldnConfig, &logging);
             auto log = new tsl::elm::ToggleListItem("除錯紀錄", logging != 0, "開", "關");
-            log->setStateChangedListener([](bool on) { ldnMitmSetLogging(&g_ldnConfig, on); });
+            log->setStateChangedListener([](bool on) { EnsureLdn(); ldnMitmSetLogging(&g_ldnConfig, on); });
             list->addItem(log);
 
             list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
@@ -987,7 +1027,11 @@ namespace {
                 tsl::changeTo<RoomListGui>();
                 return;
             }
-            if (m_tick++ % 15 == 0) {   /* ~4 times per second */
+            if (g_framesSinceShow < 2) {       /* draw the panel first, talk to the sysmodule after */
+                g_framesSinceShow++;
+                return;
+            }
+            if (m_tick++ % 60 == 0) {   /* once per second */
                 RefreshStatus();
                 if (m_itMode) m_itMode->setValue(ModeText(g_cfg.mode));
                 if (m_itServer) {
@@ -1075,6 +1119,8 @@ static void ConnectLdn() {
     });
 }
 
+namespace { void EnsureLdn() { ConnectLdn(); } }
+
 static void DisconnectLdn() {
     if (!g_serviceOk) return;
     serviceClose(&g_ldnConfig.s);
@@ -1109,9 +1155,7 @@ public:
     }
 
     void onShow() override {
-        ConnectLdn();
-        LoadConfig();
-        RefreshStatus();
+        g_framesSinceShow = 0;   /* connect + refresh after the first frames are on screen */
     }
 
     /* Tesla keeps the overlay loaded while hidden: give the sysmodule its session back. */

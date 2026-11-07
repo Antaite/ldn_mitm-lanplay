@@ -11,6 +11,9 @@
  */
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
+#include <map>
+#include <vector>
+#include "../../third_party/stb/stb_image.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -57,7 +60,6 @@ namespace {
     Result               g_roomResult = 0;
     bool                 g_roomScanRequested = false;
     bool                 g_nsOk = false;
-    std::unordered_map<u64, std::string> g_gameNames;
 
     /* Deferred navigation: tsl::goBack() is only called from Gui::update(),
      * never from inside a click handler of the Gui being destroyed. */
@@ -171,29 +173,74 @@ namespace {
         return s;
     }
 
-    std::string GameName(u64 id) {
-        auto it = g_gameNames.find(id);
-        if (it != g_gameNames.end()) {
-            return it->second;
-        }
+    /* Name, display version and a 48x48 RGBA icon, read once per game from the
+     * console's own copy (control data). Missing for games not installed here. */
+    constexpr int IconSize = 48;
+    constexpr size_t MaxIcons = 16;
+    struct GameInfo {
         std::string name;
-        if (g_nsOk) {
-            static NsApplicationControlData *data = new NsApplicationControlData;
-            u64 size = 0;
-            if (R_SUCCEEDED(nsGetApplicationControlData(NsApplicationControlSource_Storage, id, data, sizeof(*data), &size)) && size >= sizeof(data->nacp)) {
-                NacpLanguageEntry *lang = nullptr;
-                if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &lang)) && lang != nullptr && lang->name[0]) {
-                    name = lang->name;
+        std::string version;
+        std::vector<u8> icon;      /* IconSize*IconSize*4, empty = none */
+    };
+    std::map<u64, GameInfo> g_games;
+    size_t g_iconCount = 0;
+
+    void DecodeIcon(const u8 *jpg, size_t len, std::vector<u8> &out) {
+        int w = 0, h = 0, n = 0;
+        u8 *px = stbi_load_from_memory(jpg, static_cast<int>(len), &w, &h, &n, 4);
+        if (px == nullptr) return;
+        out.resize(IconSize * IconSize * 4);
+        for (int y = 0; y < IconSize; y++) {                 /* box filter down to 48x48 */
+            const int y0 = y * h / IconSize, y1 = std::max(y0 + 1, (y + 1) * h / IconSize);
+            for (int x = 0; x < IconSize; x++) {
+                const int x0 = x * w / IconSize, x1 = std::max(x0 + 1, (x + 1) * w / IconSize);
+                u32 acc[4] = {}, cnt = 0;
+                for (int sy = y0; sy < y1; sy++) for (int sx = x0; sx < x1; sx++, cnt++) {
+                    const u8 *p = px + (sy * w + sx) * 4;
+                    acc[0] += p[0]; acc[1] += p[1]; acc[2] += p[2]; acc[3] += p[3];
                 }
+                u8 *d = out.data() + (y * IconSize + x) * 4;
+                for (int c = 0; c < 4; c++) d[c] = static_cast<u8>(acc[c] / cnt);
             }
         }
-        if (name.empty()) {
+        stbi_image_free(px);
+    }
+
+    const GameInfo &Game(u64 id) {
+        auto it = g_games.find(id);
+        if (it != g_games.end()) {
+            return it->second;
+        }
+        GameInfo gi;
+        if (g_nsOk) {
+            static NsApplicationControlData *data = new NsApplicationControlData;
+            /* Cache first (cheap), then the installed content itself. */
+            const NsApplicationControlSource sources[] = { NsApplicationControlSource_CacheOnly, NsApplicationControlSource_Storage, NsApplicationControlSource_StorageOnly };
+            for (auto src : sources) {
+                u64 size = 0;
+                if (R_FAILED(nsGetApplicationControlData(src, id, data, sizeof(*data), &size)) || size < sizeof(data->nacp)) continue;
+                NacpLanguageEntry *lang = nullptr;
+                if (R_SUCCEEDED(nacpGetLanguageEntry(&data->nacp, &lang)) && lang != nullptr && lang->name[0]) {
+                    gi.name = lang->name;
+                }
+                gi.version = data->nacp.display_version;
+                if (size > sizeof(data->nacp) && g_iconCount < MaxIcons) {
+                    DecodeIcon(data->icon, size - sizeof(data->nacp), gi.icon);
+                    if (!gi.icon.empty()) g_iconCount++;
+                }
+                break;
+            }
+        }
+        if (gi.name.empty()) {
             char buf[48];
             snprintf(buf, sizeof(buf), "未安裝的遊戲 %016lX", static_cast<unsigned long>(id));
-            name = buf;
+            gi.name = buf;
         }
-        g_gameNames[id] = name;
-        return name;
+        return g_games.emplace(id, std::move(gi)).first->second;
+    }
+
+    std::string GameName(u64 id) {
+        return Game(id).name;
     }
 
     void DoProbe() {
@@ -756,14 +803,51 @@ namespace {
                         members += room.players[p];
                     }
                     std::string ipline = "IP " + Ip(room.host_ip);
-                    list->addItem(new tsl::elm::CustomDrawer([host, members, ipline](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
-                        r->drawString(host.c_str(), false, x + 20, y + 20, 16, r->a(tsl::style::color::ColorText), w - 30);
-                        if (!members.empty()) {
-                            std::string m = "成員：" + members;
-                            r->drawString(m.c_str(), false, x + 20, y + 42, 15, r->a(tsl::style::color::ColorDescription), w - 30);
+                    const GameInfo &gi = Game(room.local_comm_id);
+                    const std::vector<u8> *icon = gi.icon.empty() ? nullptr : &gi.icon;
+
+                    /* Version: the room only carries the host's localCommunicationVersion
+                     * (games refuse a different one); ours is known once we hosted/joined. */
+                    char verbuf[48];
+                    snprintf(verbuf, sizeof(verbuf), "通訊版本 %d", room.comm_version);
+                    std::string verline = verbuf;
+                    int verstate = 0;                         /* 0 unknown, 1 same, 2 different */
+                    std::string vernote = "（尚未比對）";
+                    if (room.own_known) {
+                        verstate = room.own_version == room.comm_version ? 1 : 2;
+                        if (verstate == 1) {
+                            vernote = " 版本相同";
+                        } else {
+                            snprintf(verbuf, sizeof(verbuf), " 版本不同（你的是 %d）", room.own_version);
+                            vernote = verbuf;
                         }
-                        r->drawString(ipline.c_str(), false, x + 20, y + (members.empty() ? 42 : 62), 12, r->a(tsl::style::color::ColorDescription));
-                    }), members.empty() ? 52 : 72);
+                    }
+                    if (!gi.version.empty()) vernote += "｜你的 v" + gi.version;
+
+                    const s32 lines = members.empty() ? 3 : 4;
+                    list->addItem(new tsl::elm::CustomDrawer([host, members, ipline, icon, verline, vernote, verstate, lines](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
+                        if (icon != nullptr) {
+                            r->drawBitmap(x + 12, y + 8, IconSize, IconSize, icon->data());
+                        } else {
+                            r->drawRect(x + 12, y + 8, IconSize, IconSize, r->a(tsl::Color{0x3, 0x4, 0x4, 0xF}));
+                            r->drawString("?", false, x + 12 + 18, y + 8 + 34, 24, r->a(tsl::style::color::ColorDescription));
+                        }
+                        const s32 tx = x + 12 + IconSize + 12, tw = w - (tx - x) - 10;
+                        s32 ty = y + 22;
+                        r->drawString(host.c_str(), false, tx, ty, 16, r->a(tsl::style::color::ColorText), tw);
+                        if (!members.empty()) {
+                            ty += 21;
+                            std::string m = "成員：" + members;
+                            r->drawString(m.c_str(), false, tx, ty, 15, r->a(tsl::style::color::ColorDescription), tw);
+                        }
+                        ty += 21;
+                        auto vw = r->drawString(verline.c_str(), false, tx, ty, 14, r->a(tsl::style::color::ColorDescription));
+                        const tsl::Color vc = verstate == 1 ? tsl::Color{0x0, 0xF, 0x8, 0xF} : verstate == 2 ? tsl::Color{0xF, 0x5, 0x5, 0xF} : tsl::style::color::ColorDescription;
+                        r->drawString(vernote.c_str(), false, tx + static_cast<s32>(vw.first), ty, 14, r->a(vc), std::max<s32>(10, tw - static_cast<s32>(vw.first)));
+                        ty += 19;
+                        r->drawString(ipline.c_str(), false, tx, ty, 12, r->a(tsl::style::color::ColorDescription));
+                        (void)lines;
+                    }), std::max<s32>(IconSize + 16, 22 + (lines - 1) * 20 + 14));
                 }
                 list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
                     r->drawString("在遊戲裡進入本地通訊畫面搜尋，就能加入這些房間。", false, x + 5, y + 25, 14, r->a(tsl::style::color::ColorDescription));

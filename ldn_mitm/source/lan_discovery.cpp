@@ -571,6 +571,7 @@ namespace ams::mitm::ldn {
 
         NodeInfo *node0 = &this->networkInfo.ldn.nodes[0];
         rc = this->getNodeInfo(node0, userConfig, networkConfig->localCommunicationVersion);
+        rooms::RecordOwnVersion(networkConfig->intentId.localCommunicationId, static_cast<s16>(networkConfig->localCommunicationVersion));
         if (R_FAILED(rc)) {
             return rc;
         }
@@ -691,6 +692,7 @@ namespace ams::mitm::ldn {
 
         NodeInfo myNode = {0};
         rc = this->getNodeInfo(&myNode, userConfig, localCommunicationVersion);
+        rooms::RecordOwnVersion(networkInfo->networkId.intentId.localCommunicationId, static_cast<s16>(localCommunicationVersion));
         if (R_FAILED(rc)) {
             return rc;
         }

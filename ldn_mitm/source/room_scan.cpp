@@ -7,6 +7,7 @@
 #include "debug.hpp"
 #include <arpa/inet.h>
 #include <cstring>
+#include <cinttypes>
 
 namespace ams::mitm::ldn::rooms {
 
@@ -24,6 +25,31 @@ namespace ams::mitm::ldn::rooms {
         static_assert(sizeof(LANPacketHeader) == 12);
 
         constinit os::SdkMutex g_scan_lock;
+
+        struct VerEntry { u64 id; s16 ver; u16 _p0; u32 _p1; };
+        constexpr size_t MaxVers = 32;
+        constexpr const char VerPath[] = "sdmc:/config/ldn_mitm/commver.bin";
+        constinit VerEntry g_vers[MaxVers] = {};
+        constinit bool g_vers_loaded = false;
+        constinit os::SdkMutex g_vers_lock;
+
+        void LoadVersLocked() {
+            if (g_vers_loaded) return;
+            g_vers_loaded = true;
+            fs::FileHandle f;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), VerPath, fs::OpenMode_Read))) {
+                size_t got = 0;
+                static_cast<void>(fs::ReadFile(std::addressof(got), f, 0, g_vers, sizeof(g_vers)));
+                fs::CloseFile(f);
+            }
+        }
+
+        bool LookupVer(u64 id, s16 *ver) {
+            std::scoped_lock lk(g_vers_lock);
+            LoadVersLocked();
+            for (const auto &e : g_vers) if (e.id == id && id != 0) { *ver = e.ver; return true; }
+            return false;
+        }
 
         constinit os::SdkMutex g_local_lock;
         constinit bool g_local_valid = false;
@@ -122,6 +148,11 @@ namespace ams::mitm::ldn::rooms {
             r.node_max      = info->ldn.nodeCountMax;
             r.has_password  = 0;   /* the passphrase is not visible in scan replies */
             r.is_own        = own ? 1 : 0;
+            s16 mine = 0;
+            if (LookupVer(r.local_comm_id, std::addressof(mine))) {
+                r.own_version = mine;
+                r.own_known   = 1;
+            }
             int p = 0;
             for (int n = 0; n < NodeCountMax && p < LP_ROOM_PLAYERS; n++) {
                 const NodeInfo &node = info->ldn.nodes[n];
@@ -195,6 +226,31 @@ namespace ams::mitm::ldn::rooms {
         }
         LogFormat("rooms: scan found %u (virt=%d)", *out_count, virt ? 1 : 0);
         R_SUCCEED();
+    }
+
+    void RecordOwnVersion(u64 local_comm_id, s16 version) {
+        std::scoped_lock lk(g_vers_lock);
+        LoadVersLocked();
+        VerEntry *slot = nullptr;
+        for (auto &e : g_vers) {
+            if (e.id == local_comm_id) {
+                if (e.ver == version) return;      /* unchanged: no SD write */
+                slot = std::addressof(e);
+                break;
+            }
+        }
+        if (slot == nullptr) for (auto &e : g_vers) if (e.id == 0) { slot = std::addressof(e); break; }
+        if (slot == nullptr) slot = std::addressof(g_vers[0]);
+        *slot = { local_comm_id, version, 0, 0 };
+        static_cast<void>(fs::DeleteFile(VerPath));
+        if (R_SUCCEEDED(fs::CreateFile(VerPath, sizeof(g_vers)))) {
+            fs::FileHandle f;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), VerPath, fs::OpenMode_Write))) {
+                static_cast<void>(fs::WriteFile(f, 0, g_vers, sizeof(g_vers), fs::WriteOption::Flush));
+                fs::CloseFile(f);
+            }
+        }
+        LogFormat("rooms: own version %016" PRIx64 " = %d", local_comm_id, version);
     }
 
     void PublishLocal(const void *network_info) {

@@ -17,4 +17,8 @@ namespace ams::mitm::ldn::rooms {
      * receives its own scan broadcast, so Scan() adds this one directly. */
     void PublishLocal(const void *network_info);
 
+    /* This console's localCommunicationVersion for a game (seen when it hosts or
+     * joins), kept on SD so the room list can tell if a room is joinable. */
+    void RecordOwnVersion(u64 local_comm_id, s16 version);
+
 }

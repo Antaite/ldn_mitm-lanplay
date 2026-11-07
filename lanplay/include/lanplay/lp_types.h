@@ -105,7 +105,9 @@ typedef struct {
     uint8_t  has_password;
     uint8_t  is_own;           /* the room this console is hosting */
     char     players[LP_ROOM_PLAYERS][33];   /* players[0] = host */
-    uint8_t  _reserved[0x120 - 20 - LP_ROOM_PLAYERS * 33];
+    int16_t  own_version;      /* this console's localCommunicationVersion for the game */
+    uint8_t  own_known;        /* own_version is valid (hosted/joined this game before) */
+    uint8_t  _reserved[0x120 - 20 - LP_ROOM_PLAYERS * 33 - 3];
 } lp_room_t;
 
 #ifdef __cplusplus

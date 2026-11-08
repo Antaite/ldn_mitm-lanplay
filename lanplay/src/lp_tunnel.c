@@ -143,7 +143,7 @@ static int send_raw2(const uint8_t *a, size_t al, const uint8_t *b, size_t bl, c
     if (bl) memcpy(buf + al, b, bl);
     if (cl) memcpy(buf + al + bl, c, cl);
     ssize_t r = sendto(T.fd, buf, n, 0, (const struct sockaddr *)&T.server, sizeof(T.server));
-    if (r < 0) return -1;
+    if (r < 0) { __atomic_add_fetch(&T.st.up_fail, 1, __ATOMIC_RELAXED); return -1; }
     __atomic_add_fetch(&T.st.up_bytes, (uint64_t)n, __ATOMIC_RELAXED);
     __atomic_add_fetch(&T.st.up_packets, 1, __ATOMIC_RELAXED);
     return 0;

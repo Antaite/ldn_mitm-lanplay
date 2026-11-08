@@ -77,7 +77,15 @@ typedef struct {
     char     server_msg[96];
     char     version[32];
     uint64_t relaunch_tid;     /* game that must be restarted once before it can play online, 0 = none */
-    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8 - 8];
+    /* traffic counters (since the current room started) */
+    uint32_t up_fail;          /* datagrams to the server the network refused */
+    uint32_t game_tx;          /* game -> peer datagrams sent through the bridge */
+    uint32_t game_tx_fail;     /* ... that could not be sent */
+    uint32_t game_rx;          /* peer -> game datagrams handed to the game's socket */
+    uint32_t game_rx_fail;     /* ... that could not be handed over */
+    uint32_t game_delivered;   /* ... that the game actually read */
+    uint32_t game_leaked;      /* game sent to a 10.13.x.x peer outside the bridge (lost) */
+    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8 - 8 - 7*4];
 } lp_status_t;
 
 /* Server probe (overlay server list). */

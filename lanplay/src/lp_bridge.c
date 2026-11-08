@@ -26,6 +26,36 @@ static int      g_inject_fd = -1;
 static uint16_t g_inject_port;
 
 static const uint8_t k_magic[4] = { 'L', 'P', 'B', '1' };
+static lp_bridge_stats_t g_stats;
+
+#define BUMP(f) __atomic_add_fetch(&g_stats.f, 1, __ATOMIC_RELAXED)
+
+void lp_bridge_note(int what) {
+    switch (what) {
+        case LP_BRIDGE_NOTE_DELIVERED: BUMP(delivered); break;
+        case LP_BRIDGE_NOTE_LEAKED:    BUMP(leaked); break;
+        case LP_BRIDGE_NOTE_TX_FAIL:   BUMP(tx_fail); break;
+        default: break;
+    }
+}
+
+void lp_bridge_get_stats(lp_bridge_stats_t *out) {
+    out->tx        = __atomic_load_n(&g_stats.tx, __ATOMIC_RELAXED);
+    out->tx_fail   = __atomic_load_n(&g_stats.tx_fail, __ATOMIC_RELAXED);
+    out->rx        = __atomic_load_n(&g_stats.rx, __ATOMIC_RELAXED);
+    out->rx_fail   = __atomic_load_n(&g_stats.rx_fail, __ATOMIC_RELAXED);
+    out->delivered = __atomic_load_n(&g_stats.delivered, __ATOMIC_RELAXED);
+    out->leaked    = __atomic_load_n(&g_stats.leaked, __ATOMIC_RELAXED);
+}
+
+void lp_bridge_reset_stats(void) {
+    __atomic_store_n(&g_stats.tx, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats.tx_fail, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats.rx, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats.rx_fail, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats.delivered, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats.leaked, 0, __ATOMIC_RELAXED);
+}
 
 int lp_bridge_is_virtual(uint32_t ip, int session_active) {
     if ((ip & 0xFFFF0000u) == 0x0A0D0000u) return 1;
@@ -124,9 +154,11 @@ void lp_bridge_close_owner(uint64_t owner) {
 
 long lp_bridge_sendto(uint64_t owner, int fd, const void *buf, size_t len, uint32_t ip, uint16_t port) {
     lp_bridge_sock_t s;
-    if (!lp_bridge_get(owner, fd, &s) || s.twin < 0) return -1;
+    if (!lp_bridge_get(owner, fd, &s) || s.twin < 0) { BUMP(tx_fail); return -1; }
     if (ip == 0xFFFFFFFFu) ip = (vnet_get_ip() & vnet_get_mask()) | ~vnet_get_mask();   /* 10.13.255.255 */
-    return vnet_sendto(s.twin, buf, len, ip, port);
+    long r = vnet_sendto(s.twin, buf, len, ip, port);
+    if (r < 0) BUMP(tx_fail); else BUMP(tx);
+    return r;
 }
 
 /* ------------------------------------------------------------ pump */
@@ -174,7 +206,8 @@ static void pump(void *arg) {
                 to.sin_family = AF_INET;
                 to.sin_port = htons(to_port[i]);
                 to.sin_addr.s_addr = htonl(to_ip[i]);
-                sendto(g_inject_fd, buf, (size_t)r + LP_BRIDGE_HDR, 0, (struct sockaddr *)&to, sizeof to);
+                if (sendto(g_inject_fd, buf, (size_t)r + LP_BRIDGE_HDR, 0, (struct sockaddr *)&to, sizeof to) < 0) BUMP(rx_fail);
+                else BUMP(rx);
             }
         }
     }

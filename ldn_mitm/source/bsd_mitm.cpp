@@ -227,10 +227,18 @@ namespace ams::mitm::bsd {
         u32 ip; u16 port;
         if (Active() && IsUdp(this->Pid(), fd) && ParseAddr(addr.GetPointer(), addr.GetSize(), std::addressof(ip), std::addressof(port))
             && lp_bridge_is_virtual(ip, ldn::lanplay::IsSessionActive() ? 1 : 0)) {
-            const long n = this->EnsureBridged(fd) ? lp_bridge_sendto(this->Pid(), fd, buffer.GetPointer(), buffer.GetSize(), ip, port) : -1;
+            long n = -1;
+            if (this->EnsureBridged(fd)) {
+                n = lp_bridge_sendto(this->Pid(), fd, buffer.GetPointer(), buffer.GetSize(), ip, port);
+            } else {
+                lp_bridge_note(LP_BRIDGE_NOTE_TX_FAIL);
+            }
             out_ret.SetValue(n >= 0 ? static_cast<s32>(n) : -1);
             out_errno.SetValue(n >= 0 ? 0 : E_NetUnreach);
             R_SUCCEED();
+        }
+        if (Active() && ParseAddr(addr.GetPointer(), addr.GetSize(), std::addressof(ip), std::addressof(port)) && lp_bridge_is_virtual(ip, 0)) {
+            lp_bridge_note(LP_BRIDGE_NOTE_LEAKED);      /* a virtual peer the real network cannot reach */
         }
         const InFdFlags in = { fd, flags };
         Out2 o = { -1, 0 };
@@ -318,6 +326,7 @@ namespace ams::mitm::bsd {
             std::memcpy(buf, tmp + LP_BRIDGE_HDR, n);
             if (addr && addr_len) WriteAddr(addr, addr_len, vip, vport);
             *ret = static_cast<s32>(n); *addrlen = 16;
+            lp_bridge_note(LP_BRIDGE_NOTE_DELIVERED);
         } else {
             const size_t n = std::min<size_t>(static_cast<size_t>(o.ret), len);
             std::memcpy(buf, tmp, n);

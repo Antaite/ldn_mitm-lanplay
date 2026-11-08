@@ -10,6 +10,7 @@
 extern "C" {
 #include "lanplay/lp_config.h"
 #include "lanplay/lp_tunnel.h"
+#include "lanplay/lp_bridge.h"
 #include "lanplay/lp_platform.h"
 #include "lanplay/vnet.h"
 }
@@ -156,20 +157,48 @@ namespace ams::mitm::ldn::lanplay {
             return EnabledLocked() && (g_games > 0 || now < g_game_until || now < g_panel_until);
         }
 
-        void StartTunnelLocked() {
+        constinit lp_tunnel_params_t g_running_params = {};
+
+        bool BuildParamsLocked(lp_tunnel_params_t *p) {
             const lp_server_t *srv = lp_config_current(std::addressof(g_config));
+            std::memset(p, 0, sizeof(*p));
             if (srv == nullptr) {
+                return false;
+            }
+            std::strncpy(p->host, srv->host, sizeof(p->host) - 1);
+            std::strncpy(p->user, srv->user, sizeof(p->user) - 1);
+            std::strncpy(p->pass, srv->pass, sizeof(p->pass) - 1);
+            p->port    = srv->port;
+            p->pmtu    = g_config.pmtu;
+            p->virt_ip = g_config.virt_ip;
+            return true;
+        }
+
+        void StartTunnelLocked() {
+            lp_tunnel_params_t p;
+            if (!BuildParamsLocked(std::addressof(p))) {
                 return;
             }
-            lp_tunnel_params_t p;
-            std::memset(std::addressof(p), 0, sizeof(p));
-            std::strncpy(p.host, srv->host, sizeof(p.host) - 1);
-            std::strncpy(p.user, srv->user, sizeof(p.user) - 1);
-            std::strncpy(p.pass, srv->pass, sizeof(p.pass) - 1);
-            p.port    = srv->port;
-            p.pmtu    = g_config.pmtu;
-            p.virt_ip = g_config.virt_ip;
+            g_running_params = p;
             lp_tunnel_start(std::addressof(p));
+        }
+
+        /* Restarting drops every packet in flight: only do it when something really changed,
+         * or when asked to reconnect while not connected and not in a room. */
+        bool NeedRestartLocked(bool force) {
+            if (!lp_tunnel_running()) {
+                return false;
+            }
+            lp_tunnel_params_t p;
+            if (!BuildParamsLocked(std::addressof(p)) || std::memcmp(std::addressof(p), std::addressof(g_running_params), sizeof(p)) != 0) {
+                return true;
+            }
+            if (!force || g_session_active.load(std::memory_order_relaxed)) {
+                return false;
+            }
+            lp_status_t st;
+            lp_tunnel_get_status(std::addressof(st));
+            return st.state != LP_STATE_CONNECTED;
         }
 
         void UpdateLocked() {
@@ -183,12 +212,15 @@ namespace ams::mitm::ldn::lanplay {
             }
         }
 
-        void ApplyLocked() {
+        void ApplyLocked(bool force = false) {
             g_mode = g_config.mode;
             LdnConfig::SetEnabledInternal(g_mode != LP_MODE_OFF);
 
-            if (lp_tunnel_running()) {
-                lp_tunnel_stop();           /* settings may have changed: restart below if still needed */
+            if (!EnabledLocked() || NeedRestartLocked(force)) {
+                if (lp_tunnel_running()) {
+                    LogFormat("lanplay: restart (settings changed or reconnect)");
+                    lp_tunnel_stop();
+                }
             }
             if (!EnabledLocked()) {
                 g_enabled = false;
@@ -210,13 +242,32 @@ namespace ams::mitm::ldn::lanplay {
             UpdateLocked();
         }
 
+        void LogStatsLocked() {
+            static lp_bridge_stats_t last = {};
+            static u64 last_up = 0, last_down = 0;
+            lp_bridge_stats_t b;
+            lp_bridge_get_stats(std::addressof(b));
+            lp_status_t st;
+            lp_tunnel_get_status(std::addressof(st));
+            if (std::memcmp(std::addressof(b), std::addressof(last), sizeof(b)) == 0 && st.up_packets == last_up && st.down_packets == last_down) {
+                return;
+            }
+            last = b; last_up = st.up_packets; last_down = st.down_packets;
+            LogFormat("stats: game tx %u (fail %u) rx %u (fail %u) read %u leaked %u | server up %u (fail %u) down %u ping %d",
+                      b.tx, b.tx_fail, b.rx, b.rx_fail, b.delivered, b.leaked,
+                      static_cast<unsigned>(st.up_packets), st.up_fail, static_cast<unsigned>(st.down_packets), st.ping_ms);
+        }
+
         void Supervisor(void *) {
             for (;;) {
                 s64 wait_ms = -1;
                 {
                     std::scoped_lock lk(g_lock);
                     UpdateLocked();
-                    if (lp_tunnel_running() && g_games == 0) {
+                    if (g_session_active.load(std::memory_order_relaxed)) {
+                        LogStatsLocked();
+                        wait_ms = 2000;
+                    } else if (lp_tunnel_running() && g_games == 0) {
                         const u64 now = NowMs();
                         const u64 until = std::max(g_game_until, g_panel_until);
                         wait_ms = until > now ? static_cast<s64>(until - now) + 50 : 50;
@@ -286,7 +337,7 @@ namespace ams::mitm::ldn::lanplay {
             std::scoped_lock lk(g_lock);
             g_panel_until = NowMs() + PanelGraceMs;    /* the overlay asked: it wants to see the result */
             LoadLocked();
-            ApplyLocked();
+            ApplyLocked(true);
         }
         Wake();
         R_SUCCEED();
@@ -357,7 +408,14 @@ namespace ams::mitm::ldn::lanplay {
     }
 
     void SetSessionActive(bool active) {
-        g_session_active.store(active, std::memory_order_relaxed);
+        const bool was = g_session_active.exchange(active, std::memory_order_relaxed);
+        if (active && !was) {
+            lp_bridge_reset_stats();       /* counters show this room only */
+            LogFormat("stats: room started");
+        }
+        if (active != was) {
+            Wake();                        /* the supervisor logs counters while a room is open */
+        }
     }
 
     bool IsSessionActive() {
@@ -387,6 +445,11 @@ namespace ams::mitm::ldn::lanplay {
             out->state = LP_STATE_STANDBY;
         }
         out->relaunch_tid = g_relaunch_tid.load(std::memory_order_relaxed);
+        lp_bridge_stats_t b;
+        lp_bridge_get_stats(std::addressof(b));
+        out->game_tx = b.tx; out->game_tx_fail = b.tx_fail;
+        out->game_rx = b.rx; out->game_rx_fail = b.rx_fail;
+        out->game_delivered = b.delivered; out->game_leaked = b.leaked;
         if (out->state != LP_STATE_CONNECTED && out->state != LP_STATE_AUTH_FAILED && out->state != LP_STATE_AUTH_REQUIRED) {
             out->ping_ms = -1;
         }

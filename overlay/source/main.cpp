@@ -998,7 +998,7 @@ namespace {
             list->addItem(new tsl::elm::CategoryHeader("狀態"));
             list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
                 DrawStatus(r, x, y, w);
-            }), 245);
+            }), 285);
 
             if (g_lanplayOk) {
                 auto rooms = new tsl::elm::ListItem("房間列表", "看誰正在開房");
@@ -1155,6 +1155,21 @@ namespace {
                 snprintf(line, sizeof(line), "請關閉「%s」再重開一次，才能網路對戰", GameName(g_status.relaunch_tid).c_str());
                 r->drawString(line, false, x + 5, ly, 15, r->a(tsl::Color(0xF, 0xC, 0x0, 0xF)), w - 10);
                 ly += 20;
+            }
+
+            /* Traffic of the current room: shows at a glance which hop loses the game data. */
+            if (g_cfg.mode == LP_MODE_INTERNET &&
+                (g_status.game_tx | g_status.game_rx | g_status.game_tx_fail | g_status.game_leaked) != 0) {
+                const bool bad = g_status.game_tx_fail || g_status.game_rx_fail || g_status.game_leaked || g_status.up_fail;
+                snprintf(line, sizeof(line), "對戰資料：送出 %u／收到 %u／遊戲讀取 %u",
+                         g_status.game_tx, g_status.game_rx, g_status.game_delivered);
+                r->drawString(line, false, x + 5, ly, 15, r->a(tsl::style::color::ColorText), w - 10);
+                ly += 20;
+                snprintf(line, sizeof(line), "伺服器：送出 %u／收到 %u　失敗：送 %u・交 %u・漏 %u・網 %u",
+                         static_cast<unsigned>(g_status.up_packets), static_cast<unsigned>(g_status.down_packets),
+                         g_status.game_tx_fail, g_status.game_rx_fail, g_status.game_leaked, g_status.up_fail);
+                r->drawString(line, false, x + 5, ly, 13, bad ? r->a(tsl::Color(0xF, 0x5, 0x5, 0xF)) : desc, w - 10);
+                ly += 18;
             }
 
             if (g_logging) {

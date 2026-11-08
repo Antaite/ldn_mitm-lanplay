@@ -53,6 +53,18 @@ void lp_bridge_close_owner(uint64_t owner);
 /* Send from the twin. Returns bytes sent or -1. */
 long lp_bridge_sendto(uint64_t owner, int fd, const void *buf, size_t len, uint32_t ip, uint16_t port);
 
+/* Traffic counters, for the overlay and the log. */
+typedef struct {
+    uint32_t tx, tx_fail;       /* game -> peers */
+    uint32_t rx, rx_fail;       /* peers -> game socket (loopback inject) */
+    uint32_t delivered;         /* injected datagrams the game read */
+    uint32_t leaked;            /* game sent to a virtual peer outside the bridge */
+} lp_bridge_stats_t;
+enum { LP_BRIDGE_NOTE_DELIVERED, LP_BRIDGE_NOTE_LEAKED, LP_BRIDGE_NOTE_TX_FAIL };
+void lp_bridge_note(int what);
+void lp_bridge_get_stats(lp_bridge_stats_t *out);
+void lp_bridge_reset_stats(void);
+
 /* Loopback datagram from the pump? Fills the real sender and returns 1. */
 int lp_bridge_parse(const uint8_t *buf, size_t len, uint32_t *ip, uint16_t *port);
 

@@ -80,7 +80,7 @@ jobs:
           mkdir -p tool
           cp tools/vswitch/vswitch.exe tool/
           cp tools/vswitch/vswitch tool/vswitch-linux-x86_64
-          cp tools/vswitch/使用說明.txt tool/
+          cp tools/vswitch/README-zh.txt tool/README.txt
 
       - name: Smoke test (Linux)
         run: tool/vswitch-linux-x86_64 --help
@@ -119,7 +119,7 @@ jobs:
 
       - name: Zip packages
         run: |
-          (cd vswitch-tool && chmod +x vswitch-linux-x86_64 && zip -qr "../dist/虛擬Switch測試工具_v${VER}.zip" .)
+          (cd vswitch-tool && chmod +x vswitch-linux-x86_64 && zip -qr "../dist/vswitch-tool_v${VER}.zip" .)
           cd dist
           for d in */; do (cd "$d" && zip -qr "../${d%/}.zip" .); done
           ls -la
@@ -141,6 +141,6 @@ jobs:
             - `AMS1.12.0_FW23.0.0`：大氣層 1.12.0／系統 23.0.0
             - `AMS1.12.1_FW23.0.1`：大氣層 1.12.1／系統 23.0.1
 
-            `虛擬Switch測試工具_*.zip`：電腦用的連線測試工具（Windows／Linux），用法見裡面的使用說明。
+            `vswitch-tool_*.zip`（虛擬 Switch 測試工具）：電腦用的連線測試工具（Windows／Linux），用法見裡面的使用說明。
 
             使用說明見 README。

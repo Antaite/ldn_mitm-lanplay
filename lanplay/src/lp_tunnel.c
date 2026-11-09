@@ -44,6 +44,8 @@ enum {
 #define PONG_TIMEOUT_MS   10000
 #define RESOLVE_RETRY_MS  5000
 #define RERESOLVE_MS      30000
+#define REOPEN_GAP_MS     10000     /* self-heal: at most one socket rebuild per 10 s */
+#define SEND_FAIL_LIMIT   3         /* this many failed sends in a row = the socket is dead */
 #define INFO_PERIOD_MS    20000
 #define PING_SLOTS        8
 #define SENT_SIGS         32        /* recent own packets, to tell echoes from a real conflict */
@@ -71,6 +73,9 @@ static struct {
     uint8_t            key[20];
     struct sockaddr_in server;
     int                have_server;
+    int                send_fail_streak;   /* consecutive failed sends (any thread) */
+    int                force_resolve;
+    uint64_t           last_reopen;
     uint16_t           frag_id;
     uint16_t           ping_seq;
     struct { uint16_t seq; uint64_t sent; } pings[PING_SLOTS];
@@ -136,7 +141,12 @@ static int send_raw2(const uint8_t *a, size_t al, const uint8_t *b, size_t bl, c
     if (bl) memcpy(buf + al, b, bl);
     if (cl) memcpy(buf + al + bl, c, cl);
     ssize_t r = sendto(T.fd, (const char *)buf, n, 0, (const struct sockaddr *)&T.server, sizeof(T.server));
-    if (r < 0) { __atomic_add_fetch(&T.st.up_fail, 1, __ATOMIC_RELAXED); return -1; }
+    if (r < 0) {
+        __atomic_add_fetch(&T.st.up_fail, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&T.send_fail_streak, 1, __ATOMIC_RELAXED);
+        return -1;
+    }
+    __atomic_store_n(&T.send_fail_streak, 0, __ATOMIC_RELAXED);
     __atomic_add_fetch(&T.st.up_bytes, (uint64_t)n, __ATOMIC_RELAXED);
     __atomic_add_fetch(&T.st.up_packets, 1, __ATOMIC_RELAXED);
     return 0;
@@ -441,6 +451,26 @@ static void info_thread(void *arg) {
 
 /* ---------------------------------------------------------- tunnel thread */
 
+/* Throw the server socket away and open a new one: what "reconnect" does by hand.
+ * After the console's network drops and comes back (entering a game, sleep, Wi-Fi
+ * roaming) the old socket can stay dead for good while everything looks fine. */
+static int reopen_socket(const char *why) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) { lp_log("tunnel: socket rebuild failed (%s)", why); return -1; }
+    LP_SOCK_UDP_NONBLOCK(fd);
+    struct sockaddr_in any = { .sin_family = AF_INET };
+    SET_SIN_LEN(any);
+    bind(fd, (struct sockaddr *)&any, sizeof any);
+    lp_lock();
+    int old = T.fd;
+    T.fd = fd;
+    lp_unlock();
+    if (old >= 0) close(old);
+    __atomic_store_n(&T.send_fail_streak, 0, __ATOMIC_RELAXED);
+    lp_log("tunnel: socket rebuilt (%s)", why);
+    return 0;
+}
+
 static void tunnel_thread(void *arg) {
     (void)arg;
     uint64_t next_keepalive = 0, next_ping = 0, next_resolve = 0, resolved_at = 0;
@@ -449,6 +479,7 @@ static void tunnel_thread(void *arg) {
 
         /* (Re)resolve the server address. */
         int stale = T.have_server && T.last_pong + RERESOLVE_MS < now && resolved_at + RERESOLVE_MS < now;
+        if (T.force_resolve) { stale = 1; next_resolve = 0; T.force_resolve = 0; }
         if ((!T.have_server || stale) && now >= next_resolve) {
             if (!T.have_server) set_state(LP_STATE_RESOLVING);
             uint32_t ip;
@@ -498,6 +529,22 @@ static void tunnel_thread(void *arg) {
                 lp_unlock();
             }
             if (T.st.state != LP_STATE_NO_NETWORK || s == LP_STATE_CONNECTED) set_state(s);
+
+            /* Self-heal: sends keep failing, or the server has gone quiet. */
+            int dead = __atomic_load_n(&T.send_fail_streak, __ATOMIC_RELAXED) >= SEND_FAIL_LIMIT;
+            int silent = s == LP_STATE_NO_RESPONSE || (T.st.state == LP_STATE_NO_NETWORK && s != LP_STATE_CONNECTED);
+            if ((dead || silent) && now - T.last_reopen >= REOPEN_GAP_MS) {
+                T.last_reopen = now;
+                if (reopen_socket(dead ? "sends failing" : "no reply from server") == 0) {
+                    T.force_resolve = 1;                  /* the DDNS address may have moved too */
+                    if (T.st.state == LP_STATE_NO_NETWORK) {
+                        T.first_send = now;               /* "no network" was the dead socket: start over */
+                        set_state(LP_STATE_CONNECTING);
+                    }
+                    next_keepalive = next_ping = now;
+                    continue;
+                }
+            }
 
             if (s == LP_STATE_CONNECTED) {
                 if (!T.was_connected) T.connected_at = now;

@@ -26,6 +26,9 @@ typedef int (*lp_ip_conflict_fn)(uint32_t elapsed_ms, uint32_t *new_ip);
 
 void lp_tunnel_set_input(lp_ipv4_input_fn fn);
 void lp_tunnel_set_conflict_handler(lp_ip_conflict_fn fn);
+
+/* In a room: faster pings and keepalives, loss measurement and duplicate sending. */
+void lp_tunnel_set_session(int active);
 int  lp_tunnel_start(const lp_tunnel_params_t *params);
 void lp_tunnel_stop(void);
 int  lp_tunnel_running(void);

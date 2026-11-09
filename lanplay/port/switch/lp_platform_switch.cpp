@@ -29,6 +29,18 @@ namespace {
     Arg g_args[LP_THREAD_COUNT];
 
     constinit os::SdkRecursiveMutex g_lock;
+    os::EventType g_signal;
+    constinit bool g_signal_ready = false;
+    constinit os::SdkMutex g_signal_init;
+
+    os::EventType *Signal() {
+        std::scoped_lock lk(g_signal_init);
+        if (!g_signal_ready) {
+            os::InitializeEvent(std::addressof(g_signal), false, os::EventClearMode_AutoClear);
+            g_signal_ready = true;
+        }
+        return std::addressof(g_signal);
+    }
 
     void Entry(void *p) {
         auto *a = static_cast<Arg *>(p);
@@ -98,6 +110,26 @@ uint32_t lp_platform_dns_server(void) {
         return __builtin_bswap32(primary_dns);
     }
     return 0;
+}
+
+uint32_t lp_platform_local_ip(void) {
+    u32 ip = 0;
+    if (R_FAILED(nifmGetCurrentIpAddress(&ip))) {
+        return 0;
+    }
+    return ip;
+}
+
+void lp_wait_signal(uint32_t ms) {
+    if (ms == LP_WAIT_FOREVER) {
+        os::WaitEvent(Signal());
+    } else {
+        os::TimedWaitEvent(Signal(), TimeSpan::FromMilliSeconds(ms));
+    }
+}
+
+void lp_signal(void) {
+    os::SignalEvent(Signal());
 }
 
 void lp_lock(void)   { g_lock.Lock(); }

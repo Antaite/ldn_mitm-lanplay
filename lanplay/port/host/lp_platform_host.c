@@ -35,6 +35,32 @@ uint64_t lp_now_ms(void) {
 void lp_sleep_ms(uint32_t ms) { usleep(ms * 1000); }
 void lp_random(void *buf, size_t len) { for (size_t i = 0; i < len; i++) ((uint8_t *)buf)[i] = (uint8_t)rand(); }
 uint32_t lp_platform_dns_server(void) { return 0; }
+uint32_t lp_platform_local_ip(void) { return 0; }   /* no network watch on the PC tool */
+
+static pthread_mutex_t g_sig_m = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_sig_c = PTHREAD_COND_INITIALIZER;
+static int             g_sig;
+void lp_wait_signal(uint32_t ms) {
+    pthread_mutex_lock(&g_sig_m);
+    if (!g_sig) {
+        if (ms == LP_WAIT_FOREVER) {
+            while (!g_sig) pthread_cond_wait(&g_sig_c, &g_sig_m);
+        } else {
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000;
+            if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+            pthread_cond_timedwait(&g_sig_c, &g_sig_m, &ts);
+        }
+    }
+    g_sig = 0;
+    pthread_mutex_unlock(&g_sig_m);
+}
+void lp_signal(void) {
+    pthread_mutex_lock(&g_sig_m);
+    g_sig = 1;
+    pthread_cond_signal(&g_sig_c);
+    pthread_mutex_unlock(&g_sig_m);
+}
 void lp_lock(void) { pthread_mutex_lock(&g_lock); }
 void lp_unlock(void) { pthread_mutex_unlock(&g_lock); }
 void lp_log(const char *fmt, ...) {

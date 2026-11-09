@@ -11,7 +11,6 @@
 #include <unistd.h>
 
 #define POLL_MS 20
-#define IDLE_MS 200        /* nothing bridged: wake rarely */
 
 typedef struct {
     lp_bridge_sock_t s;
@@ -81,6 +80,7 @@ static slot_t *find(uint64_t owner, int fd) {
 static void drop(slot_t *sl) {           /* lp_lock held */
     if (sl->s.twin >= 0 && g_close_n < LP_BRIDGE_MAX) g_close_q[g_close_n++] = sl->s.twin;
     memset(sl, 0, sizeof *sl);
+    lp_signal();                         /* let the pump close the twin */
 }
 
 int lp_bridge_open(uint64_t owner, int fd, uint16_t port, uint32_t inject_ip, int virt_bound) {
@@ -119,6 +119,7 @@ int lp_bridge_open(uint64_t owner, int fd, uint16_t port, uint32_t inject_ip, in
     sl->s.inject_ip = inject_ip;
     sl->s.virt_bound = (uint8_t)virt_bound;
     lp_unlock();
+    lp_signal();                         /* wake the pump */
     lp_log("bridge: port %u bridged (owner %llu fd %d)", (unsigned)port, (unsigned long long)owner, fd);
     return 0;
 }
@@ -187,7 +188,7 @@ static void pump(void *arg) {
         lp_unlock();
         for (int i = 0; i < nc; i++) vnet_close(closing[i]);
 
-        if (n == 0) { lp_sleep_ms(IDLE_MS); continue; }
+        if (n == 0) { lp_wait_signal(LP_WAIT_FOREVER); continue; }   /* nothing bridged: sleep until a game binds */
         if (vnet_poll(pf, (unsigned)n, POLL_MS) <= 0) continue;
 
         for (int i = 0; i < n; i++) {

@@ -39,6 +39,23 @@ uint64_t lp_now_ms(void) { return (uint64_t)GetTickCount64(); }
 void lp_sleep_ms(uint32_t ms) { Sleep(ms); }
 void lp_random(void *buf, size_t len) { for (size_t i = 0; i < len; i++) ((uint8_t *)buf)[i] = (uint8_t)rand(); }
 uint32_t lp_platform_dns_server(void) { return 0; }   /* falls back to 1.1.1.1 / 8.8.8.8 / system resolver */
+uint32_t lp_platform_local_ip(void) { return 0; }     /* no network watch on the PC tool */
+
+static HANDLE g_sig;
+static INIT_ONCE g_sig_once = INIT_ONCE_STATIC_INIT;
+static BOOL CALLBACK init_sig(PINIT_ONCE o, PVOID p, PVOID *c) {
+    (void)o; (void)p; (void)c;
+    g_sig = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset */
+    return TRUE;
+}
+void lp_wait_signal(uint32_t ms) {
+    InitOnceExecuteOnce(&g_sig_once, init_sig, NULL, NULL);
+    WaitForSingleObject(g_sig, ms == LP_WAIT_FOREVER ? INFINITE : ms);
+}
+void lp_signal(void) {
+    InitOnceExecuteOnce(&g_sig_once, init_sig, NULL, NULL);
+    SetEvent(g_sig);
+}
 
 void lp_lock(void) { InitOnceExecuteOnce(&g_once, init_lock, NULL, NULL); EnterCriticalSection(&g_lock); }
 void lp_unlock(void) { LeaveCriticalSection(&g_lock); }

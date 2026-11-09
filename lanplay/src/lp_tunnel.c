@@ -45,6 +45,18 @@ enum {
 #define RESOLVE_RETRY_MS  5000
 #define RERESOLVE_MS      30000
 #define REOPEN_GAP_MS     10000     /* self-heal: at most one socket rebuild per 10 s */
+/* In a room (game session): react fast so the game never notices a drop. */
+#define ROOM_PING_MS      1000
+#define ROOM_KEEPALIVE_MS 3000      /* keeps home-router NAT mappings open in a quiet lobby */
+#define ROOM_PONG_MS      3500
+#define NETCHECK_MS       1000      /* poll the console's own network address */
+#define LOSS_WIN          20        /* pings in the loss window */
+#define DEDUP_SLOTS       1024
+#define DEDUP_MS          2000
+#define DUP_MIN_ON_MS     30000     /* once on, stay on at least this long */
+#define DUP_REQ_MS        10000     /* re-ask peers while still lossy */
+#define DUP_PEERS         8
+#define DUP_PEER_MS       25000
 #define SEND_FAIL_LIMIT   3         /* this many failed sends in a row = the socket is dead */
 #define INFO_PERIOD_MS    20000
 #define PING_SLOTS        8
@@ -76,6 +88,16 @@ static struct {
     int                send_fail_streak;   /* consecutive failed sends (any thread) */
     int                force_resolve;
     uint64_t           last_reopen;
+    uint32_t           local_ip;           /* console's LAN address last seen */
+    int                local_known;
+    uint64_t           next_netcheck;
+    struct { uint16_t seq; uint8_t acked; uint64_t sent; } lw[LOSS_WIN];
+    volatile int       dup;                /* duplicate sending on */
+    uint64_t           dup_since, last_dupreq;
+    struct { uint8_t ip[4]; uint64_t until; } dup_peer[DUP_PEERS];
+    struct { uint64_t key; uint64_t t; } dd[DEDUP_SLOTS];
+    struct { uint8_t src[4]; uint16_t id; uint64_t t; } done_frag[16];
+    uint32_t           done_idx;
     uint16_t           frag_id;
     uint16_t           ping_seq;
     struct { uint16_t seq; uint64_t sent; } pings[PING_SLOTS];
@@ -95,6 +117,9 @@ static struct {
     uint64_t           connected_at;
     uint8_t            rx[RECV_BUF_LEN];
 } T = { .fd = -1 };
+
+static volatile int g_session;
+void lp_tunnel_set_session(int active) { g_session = active ? 1 : 0; }
 
 void lp_tunnel_set_input(lp_ipv4_input_fn fn) { T.input = fn; }
 void lp_tunnel_set_conflict_handler(lp_ip_conflict_fn fn) { T.on_conflict = fn; }
@@ -156,7 +181,17 @@ static int send_type(uint8_t type, const void *payload, size_t len) {
     return send_raw2(&type, 1, payload, len, NULL, 0);
 }
 
+static int send_ipv4_once(const uint8_t *pkt, size_t len);
+static int dup_peer_wants(const uint8_t *pkt);
+
+/* In a lossy room every packet goes out twice; the receiver drops the copy (deliver()). */
 int lp_tunnel_send_ipv4(const uint8_t *pkt, size_t len) {
+    int r = send_ipv4_once(pkt, len);
+    if (g_session && len >= 20 && (T.dup || dup_peer_wants(pkt))) send_ipv4_once(pkt, len);
+    return r;
+}
+
+static int send_ipv4_once(const uint8_t *pkt, size_t len) {
     if (!T.running || len < 20 || len > 1600) return -1;
     if (!memcmp(pkt + 12, T.ip_be, 4)) {
         uint32_t i = __atomic_fetch_add(&T.sent_idx, 1, __ATOMIC_RELAXED);
@@ -189,9 +224,11 @@ int lp_tunnel_send_ipv4(const uint8_t *pkt, size_t len) {
 
 /* Small UDP broadcast from our IP. Any other client using the same IP sees a packet
  * "from itself" and knows there is a conflict; it answers with its own probe. */
-static void send_probe(uint64_t now) {
-    static const char tag[] = "LPIPCHK";
-    uint8_t b[20 + 8 + sizeof tag - 1];
+/* A tiny UDP broadcast to every client in the virtual subnet (port 11449): "LPIPCHK" announces our
+ * IP (conflict check), "LPDUPRQ" asks peers to send to us twice because our link is losing packets. */
+static void send_ctrl(const char *tag7) {
+    const size_t tl = 7;
+    uint8_t b[20 + 8 + 7];
     uint8_t rnd[2]; lp_random(rnd, 2);
     memset(b, 0, sizeof b);
     b[0] = 0x45; b[2] = 0; b[3] = sizeof b;
@@ -205,10 +242,52 @@ static void send_probe(uint64_t now) {
     sum = ~sum & 0xFFFF;
     b[10] = (uint8_t)(sum >> 8); b[11] = (uint8_t)sum;
     b[20] = PROBE_PORT >> 8; b[21] = PROBE_PORT & 0xFF; b[22] = PROBE_PORT >> 8; b[23] = PROBE_PORT & 0xFF;
-    b[25] = 8 + sizeof tag - 1;                                     /* UDP checksum 0 = none */
-    memcpy(b + 28, tag, sizeof tag - 1);
-    T.last_probe = now;
+    b[25] = (uint8_t)(8 + tl);                                      /* UDP checksum 0 = none */
+    memcpy(b + 28, tag7, tl);
     lp_tunnel_send_ipv4(b, sizeof b);
+}
+
+static void send_probe(uint64_t now) {
+    T.last_probe = now;
+    send_ctrl("LPIPCHK");
+}
+
+/* Peers that asked for duplicates (their link is lossy). */
+static void dup_peer_mark(const uint8_t *ip_be, uint64_t now) {
+    int slot = 0;
+    for (int i = 0; i < DUP_PEERS; i++) {
+        if (!memcmp(T.dup_peer[i].ip, ip_be, 4)) { slot = i; break; }
+        if (T.dup_peer[i].until < T.dup_peer[slot].until) slot = i;
+    }
+    if (memcmp(T.dup_peer[slot].ip, ip_be, 4)) lp_log("tunnel: a peer asked for duplicate sending");
+    memcpy(T.dup_peer[slot].ip, ip_be, 4);
+    T.dup_peer[slot].until = now + DUP_PEER_MS;
+}
+
+static int dup_peer_wants(const uint8_t *pkt) {
+    uint64_t now = lp_now_ms();
+    for (int i = 0; i < DUP_PEERS; i++)
+        if (T.dup_peer[i].until > now && !memcmp(T.dup_peer[i].ip, pkt + 16, 4)) return 1;
+    return 0;
+}
+
+/* A copy sent by a peer in duplicate mode: same source, IP id, header checksum and the
+ * first L4 word (UDP length+checksum / TCP sequence), seen within 2 s. */
+static int is_duplicate(const uint8_t *pkt, size_t len) {
+    size_t ihl = (size_t)(pkt[0] & 0x0F) * 4;
+    if (ihl < 20 || len < ihl + 8) return 0;
+    uint64_t k = (uint64_t)pkt[12] << 56 | (uint64_t)pkt[13] << 48 | (uint64_t)pkt[14] << 40 | (uint64_t)pkt[15] << 32 |
+                 (uint64_t)pkt[4] << 24 | (uint64_t)pkt[5] << 16 | (uint64_t)pkt[10] << 8 | pkt[11];
+    uint64_t l4 = (uint64_t)pkt[ihl + 4] << 24 | (uint64_t)pkt[ihl + 5] << 16 | (uint64_t)pkt[ihl + 6] << 8 | pkt[ihl + 7];
+    k ^= l4 * 0x9E3779B97F4A7C15ull;
+    k ^= (uint64_t)pkt[6] << 8 | pkt[7];                 /* fragment offset */
+    if (k == 0) k = 1;
+    uint64_t now = lp_now_ms();
+    uint32_t h = (uint32_t)(k ^ (k >> 29) ^ (k >> 47)) & (DEDUP_SLOTS - 1);
+    if (T.dd[h].key == k && now - T.dd[h].t < DEDUP_MS) return 1;
+    T.dd[h].key = k;
+    T.dd[h].t = now;
+    return 0;
 }
 
 static void deliver(const uint8_t *pkt, size_t len) {
@@ -224,6 +303,13 @@ static void deliver(const uint8_t *pkt, size_t len) {
         }
         T.conflict_last = now;
         if (now - T.last_probe >= PROBE_MIN_GAP_MS) send_probe(now);   /* let the other side notice too */
+        return;
+    }
+    if (is_duplicate(pkt, len)) return;
+    /* a peer's "send me everything twice" request: handled here, not passed to the stack */
+    if ((pkt[0] & 0x0F) == 5 && pkt[9] == 17 && len >= 35 && pkt[22] == (PROBE_PORT >> 8) && pkt[23] == (PROBE_PORT & 0xFF) &&
+        !memcmp(pkt + 28, "LPDUPRQ", 7)) {
+        dup_peer_mark(pkt + 12, lp_now_ms());
         return;
     }
     if (T.input) T.input(pkt, len);
@@ -254,6 +340,8 @@ static void on_frag(const uint8_t *p, size_t len) {
     if ((size_t)pmtu * part + plen > FRAG_MAX_LEN) return;
 
     uint64_t now = lp_now_ms();
+    for (int i = 0; i < 16; i++)                       /* a duplicate of a packet already rebuilt */
+        if (T.done_frag[i].id == id && !memcmp(T.done_frag[i].src, p, 4) && now - T.done_frag[i].t < DEDUP_MS) return;
     frag_slot_t *f = NULL, *oldest = &T.frags[0];
     for (int i = 0; i < FRAG_SLOTS; i++) {
         frag_slot_t *s = &T.frags[i];
@@ -273,6 +361,8 @@ static void on_frag(const uint8_t *p, size_t len) {
     uint32_t want = total == 32 ? 0xFFFFFFFFu : ((1u << total) - 1);
     if (f->parts == want && f->total_len) {
         f->used = 0;
+        uint32_t d = T.done_idx++ % 16;
+        memcpy(T.done_frag[d].src, f->src, 4); T.done_frag[d].id = f->id; T.done_frag[d].t = now;
         deliver(f->buf, f->total_len);
     }
 }
@@ -326,6 +416,7 @@ static void on_packet(const uint8_t *b, size_t n) {
                 }
             }
             T.last_pong = now;
+            if (T.lw[seq % LOSS_WIN].seq == seq) T.lw[seq % LOSS_WIN].acked = 1;
             break;
         }
         case T_INFO: {
@@ -467,8 +558,39 @@ static int reopen_socket(const char *why) {
     lp_unlock();
     if (old >= 0) close(old);
     __atomic_store_n(&T.send_fail_streak, 0, __ATOMIC_RELAXED);
+    lp_lock();
+    T.st.rebuilds++;
+    lp_unlock();
     lp_log("tunnel: socket rebuilt (%s)", why);
     return 0;
+}
+
+/* Ping loss over the last LOSS_WIN pings (answered within 1.5 s) -> duplicate mode. */
+static void update_loss(uint64_t now) {
+    int total = 0, lost = 0;
+    for (int i = 0; i < LOSS_WIN; i++) {
+        if (!T.lw[i].sent || now - T.lw[i].sent < 1500 || now - T.lw[i].sent > 25000) continue;
+        total++;
+        if (!T.lw[i].acked) lost++;
+    }
+    int pct = total ? lost * 100 / total : 0;
+    int dup = T.dup;
+    if (!g_session) dup = 0;
+    else if (total >= 10 && pct > 5) dup = 1;
+    else if (total >= 10 && lost == 0 && now - T.dup_since >= DUP_MIN_ON_MS) dup = 0;
+    if (dup != T.dup) {
+        lp_log("tunnel: duplicate sending %s (loss %d%% of %d pings)", dup ? "on" : "off", pct, total);
+        if (dup) { T.dup_since = now; T.last_dupreq = 0; }
+    }
+    T.dup = dup;
+    if (dup && now - T.last_dupreq >= DUP_REQ_MS) {      /* our link loses packets both ways: ask peers too */
+        T.last_dupreq = now;
+        send_ctrl("LPDUPRQ");
+    }
+    lp_lock();
+    T.st.dup_active = (uint8_t)dup;
+    T.st.loss_pct = (uint8_t)pct;
+    lp_unlock();
 }
 
 static void tunnel_thread(void *arg) {
@@ -506,21 +628,26 @@ static void tunnel_thread(void *arg) {
         if (T.have_server) {
             if (now >= next_keepalive) {
                 if (send_type(T_KEEPALIVE, NULL, 0) != 0 && T.st.state != LP_STATE_CONNECTED) set_state(LP_STATE_NO_NETWORK);
-                next_keepalive = now + KEEPALIVE_MS;
+                next_keepalive = now + (g_session ? ROOM_KEEPALIVE_MS : KEEPALIVE_MS);
             }
             if (now >= next_ping) {
                 uint16_t seq = ++T.ping_seq;
                 uint8_t pl[4] = { (uint8_t)(seq >> 8), (uint8_t)seq, 0, 0 };   /* rust server requires exactly 4 bytes */
                 T.pings[seq % PING_SLOTS].seq = seq;
                 T.pings[seq % PING_SLOTS].sent = now;
+                T.lw[seq % LOSS_WIN].seq = seq;
+                T.lw[seq % LOSS_WIN].acked = 0;
+                T.lw[seq % LOSS_WIN].sent = now;
                 send_type(T_PING, pl, sizeof pl);
-                next_ping = now + PING_MS;
+                next_ping = now + (g_session ? ROOM_PING_MS : PING_MS);
+                update_loss(now);
             }
 
             uint32_t s;
+            const uint64_t pong_to = g_session ? ROOM_PONG_MS : PONG_TIMEOUT_MS;
             if (T.last_auth_error && now - T.last_auth_error < 15000) s = LP_STATE_AUTH_FAILED;
             else if (T.p.user[0] == 0 && T.last_auth_req && now - T.last_auth_req < 15000) s = LP_STATE_AUTH_REQUIRED;
-            else if (T.last_pong && now - T.last_pong < PONG_TIMEOUT_MS) s = LP_STATE_CONNECTED;
+            else if (T.last_pong && now - T.last_pong < pong_to) s = LP_STATE_CONNECTED;
             else if (now - T.first_send < PONG_TIMEOUT_MS) s = LP_STATE_CONNECTING;
             else s = LP_STATE_NO_RESPONSE;
             if (s != LP_STATE_CONNECTED) {
@@ -530,10 +657,25 @@ static void tunnel_thread(void *arg) {
             }
             if (T.st.state != LP_STATE_NO_NETWORK || s == LP_STATE_CONNECTED) set_state(s);
 
-            /* Self-heal: sends keep failing, or the server has gone quiet. */
+            /* Self-heal 1: the console's own network came back or changed address. */
+            if (now >= T.next_netcheck) {
+                T.next_netcheck = now + NETCHECK_MS;
+                uint32_t lip = lp_platform_local_ip();
+                if (T.local_known && lip != T.local_ip && lip != 0) {
+                    if (reopen_socket("console network changed") == 0) {
+                        T.last_reopen = now;
+                        T.force_resolve = 1;
+                        next_keepalive = next_ping = now;
+                    }
+                }
+                if (lip != 0 || T.local_known) { T.local_ip = lip; T.local_known = 1; }
+            }
+
+            /* Self-heal 2: sends keep failing, or the server has gone quiet. */
             int dead = __atomic_load_n(&T.send_fail_streak, __ATOMIC_RELAXED) >= SEND_FAIL_LIMIT;
             int silent = s == LP_STATE_NO_RESPONSE || (T.st.state == LP_STATE_NO_NETWORK && s != LP_STATE_CONNECTED);
-            if ((dead || silent) && now - T.last_reopen >= REOPEN_GAP_MS) {
+            const uint64_t gap = g_session ? ROOM_PONG_MS : REOPEN_GAP_MS;
+            if ((dead || silent) && now - T.last_reopen >= gap) {
                 T.last_reopen = now;
                 if (reopen_socket(dead ? "sends failing" : "no reply from server") == 0) {
                     T.force_resolve = 1;                  /* the DDNS address may have moved too */

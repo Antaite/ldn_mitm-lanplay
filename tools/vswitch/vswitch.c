@@ -226,7 +226,7 @@ static void cmd_host(int seconds) {
 
 static void usage(const char *a0) {
     printf("虛擬 Switch 測試工具 v%s\n", VS_VERSION);
-    printf("用法：%s [status|rooms|ping IP|host] [-s 伺服器[:埠]] [-u 帳號 -p 密碼] [-m pmtu] [-t 秒] [-v]\n", a0);
+    printf("用法：%s [status|rooms|ping IP|host] [-s 伺服器[:埠]] [-u 帳號 -p 密碼] [-m pmtu] [-t 秒] [-r 房間模式] [-w 先等幾秒] [-v]\n", a0);
     printf("不加參數會打開互動選單。\n");
 }
 
@@ -275,13 +275,15 @@ static int interactive(void) {
 int main(int argc, char **argv) {
     vs_os_init();
     const char *cmd = NULL, *arg = NULL;
-    int seconds = 0;
+    int seconds = 0, wait_s = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-s") && i + 1 < argc) { if (!parse_server(argv[++i], &g_p)) { printf("位址格式不對。\n"); return 1; } }
         else if (!strcmp(argv[i], "-u") && i + 1 < argc) snprintf(g_p.user, sizeof g_p.user, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-p") && i + 1 < argc) snprintf(g_p.pass, sizeof g_p.pass, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) seconds = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-m") && i + 1 < argc) g_p.pmtu = (uint32_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-r")) lp_tunnel_set_session(1);           /* act like a console in a room */
+        else if (!strcmp(argv[i], "-w") && i + 1 < argc) wait_s = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-v")) vs_os_verbose(1);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
         else if (!cmd) cmd = argv[i];
@@ -294,6 +296,7 @@ int main(int argc, char **argv) {
         if (!saved[0] || !parse_server(saved, &g_p)) { printf("請用 -s 指定伺服器。\n"); return 1; }
     }
     if (!connect_server(0)) return 2;
+    if (wait_s > 0) lp_sleep_ms((uint32_t)wait_s * 1000);
     int rc = 0;
     if (!strcmp(cmd, "status")) cmd_status();
     else if (!strcmp(cmd, "rooms")) cmd_rooms();

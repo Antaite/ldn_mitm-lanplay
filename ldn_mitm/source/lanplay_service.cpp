@@ -253,9 +253,10 @@ namespace ams::mitm::ldn::lanplay {
                 return;
             }
             last = b; last_up = st.up_packets; last_down = st.down_packets;
-            LogFormat("stats: game tx %u (fail %u) rx %u (fail %u) read %u leaked %u | server up %u (fail %u) down %u ping %d",
+            LogFormat("stats: game tx %u (fail %u) rx %u (fail %u) read %u leaked %u | server up %u (fail %u) down %u ping %d loss %u%% dup %u rebuilds %u",
                       b.tx, b.tx_fail, b.rx, b.rx_fail, b.delivered, b.leaked,
-                      static_cast<unsigned>(st.up_packets), st.up_fail, static_cast<unsigned>(st.down_packets), st.ping_ms);
+                      static_cast<unsigned>(st.up_packets), st.up_fail, static_cast<unsigned>(st.down_packets), st.ping_ms,
+                      st.loss_pct, st.dup_active, st.rebuilds);
         }
 
         void Supervisor(void *) {
@@ -409,6 +410,7 @@ namespace ams::mitm::ldn::lanplay {
 
     void SetSessionActive(bool active) {
         const bool was = g_session_active.exchange(active, std::memory_order_relaxed);
+        lp_tunnel_set_session(active ? 1 : 0);      /* faster pings/keepalives, loss watch, duplicates */
         if (active && !was) {
             lp_bridge_reset_stats();       /* counters show this room only */
             LogFormat("stats: room started");

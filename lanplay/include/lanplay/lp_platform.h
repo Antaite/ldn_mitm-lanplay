@@ -15,6 +15,12 @@ uint64_t lp_now_ms(void);
 void     lp_sleep_ms(uint32_t ms);
 void     lp_random(void *buf, size_t len);
 uint32_t lp_platform_dns_server(void);   /* host order, 0 = unknown */
+uint32_t lp_platform_local_ip(void);     /* console's own LAN address (any order), 0 = offline/unknown */
+
+/* One wake-up signal for the bridge pump, so it can sleep for good while idle. */
+#define LP_WAIT_FOREVER 0xFFFFFFFFu
+void     lp_wait_signal(uint32_t ms);
+void     lp_signal(void);
 void     lp_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* Simple lock used for status snapshots. */

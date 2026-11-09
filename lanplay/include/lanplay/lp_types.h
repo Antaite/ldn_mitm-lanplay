@@ -85,7 +85,11 @@ typedef struct {
     uint32_t game_rx_fail;     /* ... that could not be handed over */
     uint32_t game_delivered;   /* ... that the game actually read */
     uint32_t game_leaked;      /* game sent to a 10.13.x.x peer outside the bridge (lost) */
-    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8 - 8 - 7*4];
+    uint32_t rebuilds;         /* times the server socket was rebuilt since the tunnel started */
+    uint8_t  dup_active;       /* sending every packet twice (loss seen while in a room) */
+    uint8_t  loss_pct;         /* ping loss to the server over the last ~20 s in a room */
+    uint8_t  _pad2[2];
+    uint8_t  _reserved[0x100 - 96 - 32 - 4*4 - 2 - 12 - 2 - 8 - 16 - 8 - 8 - 7*4 - 8];
 } lp_status_t;
 
 /* Server probe (overlay server list). */

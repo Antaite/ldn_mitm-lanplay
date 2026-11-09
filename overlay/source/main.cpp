@@ -998,7 +998,7 @@ namespace {
             list->addItem(new tsl::elm::CategoryHeader("狀態"));
             list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
                 DrawStatus(r, x, y, w);
-            }), 285);
+            }), 305);
 
             if (g_lanplayOk) {
                 auto rooms = new tsl::elm::ListItem("房間列表", "看誰正在開房");
@@ -1169,6 +1169,11 @@ namespace {
                          static_cast<unsigned>(g_status.up_packets), static_cast<unsigned>(g_status.down_packets),
                          g_status.game_tx_fail, g_status.game_rx_fail, g_status.game_leaked, g_status.up_fail);
                 r->drawString(line, false, x + 5, ly, 13, bad ? r->a(tsl::Color(0xF, 0x5, 0x5, 0xF)) : desc, w - 10);
+                ly += 18;
+                snprintf(line, sizeof(line), "掉包 %u%%　自動重連 %u 次%s", g_status.loss_pct, g_status.rebuilds,
+                         g_status.dup_active ? "　網路不穩：雙重傳送中" : "");
+                r->drawString(line, false, x + 5, ly, 13,
+                              g_status.dup_active ? r->a(tsl::Color(0xF, 0xC, 0x0, 0xF)) : desc, w - 10);
                 ly += 18;
             }
 

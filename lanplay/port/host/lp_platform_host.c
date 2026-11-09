@@ -38,6 +38,7 @@ uint32_t lp_platform_dns_server(void) { return 0; }
 void lp_lock(void) { pthread_mutex_lock(&g_lock); }
 void lp_unlock(void) { pthread_mutex_unlock(&g_lock); }
 void lp_log(const char *fmt, ...) {
+    if (getenv("LP_QUIET")) return;
     va_list ap; va_start(ap, fmt);
     fprintf(stderr, "[lp] "); vfprintf(stderr, fmt, ap); fputc('\n', stderr);
     va_end(ap);

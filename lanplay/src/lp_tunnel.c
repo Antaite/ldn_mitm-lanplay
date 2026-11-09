@@ -23,14 +23,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include "lanplay/lp_sock.h"
 
 enum {
     T_KEEPALIVE = 0x00, T_IPV4 = 0x01, T_PING = 0x02, T_IPV4_FRAG = 0x03, T_AUTH_ME = 0x04, T_INFO = 0x10,
@@ -142,7 +135,7 @@ static int send_raw2(const uint8_t *a, size_t al, const uint8_t *b, size_t bl, c
     memcpy(buf, a, al);
     if (bl) memcpy(buf + al, b, bl);
     if (cl) memcpy(buf + al + bl, c, cl);
-    ssize_t r = sendto(T.fd, buf, n, 0, (const struct sockaddr *)&T.server, sizeof(T.server));
+    ssize_t r = sendto(T.fd, (const char *)buf, n, 0, (const struct sockaddr *)&T.server, sizeof(T.server));
     if (r < 0) { __atomic_add_fetch(&T.st.up_fail, 1, __ATOMIC_RELAXED); return -1; }
     __atomic_add_fetch(&T.st.up_bytes, (uint64_t)n, __ATOMIC_RELAXED);
     __atomic_add_fetch(&T.st.up_packets, 1, __ATOMIC_RELAXED);
@@ -351,10 +344,10 @@ static int dns_query(uint32_t dns_ip, const char *host, uint32_t *out) {
     SET_SIN_LEN(a);
     int ok = -1;
     for (int attempt = 0; attempt < 2 && ok != 0 && T.running; attempt++) {
-        if (sendto(fd, q, qlen, 0, (struct sockaddr *)&a, sizeof a) < 0) break;
+        if (sendto(fd, (const char *)q, qlen, 0, (struct sockaddr *)&a, sizeof a) < 0) break;
         struct pollfd pf = { .fd = fd, .events = POLLIN };
         if (poll(&pf, 1, 1500) <= 0) continue;
-        ssize_t n = recv(fd, r, sizeof r, 0);
+        ssize_t n = recv(fd, (char *)r, sizeof r, 0);
         uint16_t rid; uint32_t ip;
         if (n > 0 && lp_dns_parse(r, (size_t)n, &rid, &ip) == 0 && rid == qid) { *out = ip; ok = 0; }
     }
@@ -406,11 +399,10 @@ static void info_thread(void *arg) {
         struct sockaddr_in a = T.server;
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) continue;
-        int fl = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        LP_SOCK_SET_NONBLOCK(fd);
         int online = -1;
         int rc = connect(fd, (struct sockaddr *)&a, sizeof a);
-        if (rc == 0 || errno == EINPROGRESS) {
+        if (rc == 0 || LP_SOCK_IN_PROGRESS()) {
             struct pollfd pf = { .fd = fd, .events = POLLOUT };
             int ready = rc == 0;
             for (int w = 0; !ready && w < 10 && T.running; w++) {   /* 2.5 s, but stop quickly */
@@ -419,12 +411,12 @@ static void info_thread(void *arg) {
             }
             if (ready) {
                 int err = 0; socklen_t el = sizeof err;
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &el);
                 if (err == 0) {
                     char req[256], resp[1024];
                     char ip[16]; lp_ip_to_str(ntohl(a.sin_addr.s_addr), ip);
                     int rl = snprintf(req, sizeof req, "GET /info HTTP/1.0\r\nHost: %s:%u\r\nUser-Agent: ldn_mitm-lanplay\r\n\r\n", ip, (unsigned)ntohs(a.sin_port));
-                    if (send(fd, req, (size_t)rl, 0) == rl) {
+                    if (send(fd, req, (size_t)rl, 0) == (ssize_t)rl) {
                         size_t got = 0;
                         uint64_t deadline = lp_now_ms() + 2500;
                         while (got < sizeof resp - 1 && lp_now_ms() < deadline && T.running) {
@@ -522,7 +514,7 @@ static void tunnel_thread(void *arg) {
         if (pr > 0 && (pf.revents & POLLIN)) {
             for (int burst = 0; burst < 64; burst++) {
                 struct sockaddr_in from; socklen_t fl = sizeof from;
-                ssize_t n = recvfrom(T.fd, T.rx, sizeof T.rx, MSG_DONTWAIT, (struct sockaddr *)&from, &fl);
+                ssize_t n = recvfrom(T.fd, (char *)T.rx, sizeof T.rx, MSG_DONTWAIT, (struct sockaddr *)&from, &fl);
                 if (n <= 0) break;
                 if (from.sin_addr.s_addr != T.server.sin_addr.s_addr || from.sin_port != T.server.sin_port) continue;
                 on_packet(T.rx, (size_t)n);
@@ -552,6 +544,7 @@ int lp_tunnel_start(const lp_tunnel_params_t *params) {
 
     T.fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (T.fd < 0) { T.st.state = LP_STATE_NO_NETWORK; return -1; }
+    LP_SOCK_UDP_NONBLOCK(T.fd);
     struct sockaddr_in any = { .sin_family = AF_INET };
     SET_SIN_LEN(any);
     bind(T.fd, (struct sockaddr *)&any, sizeof any);

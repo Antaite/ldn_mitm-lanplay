@@ -26,7 +26,9 @@
 #define LWIP_IPV4                       1
 #define LWIP_IPV6                       0
 #define LWIP_ICMP                       1
-#define LWIP_RAW                        0
+#ifndef LWIP_RAW
+#define LWIP_RAW                        0   /* the PC test tool turns it on for ICMP ping */
+#endif
 #define LWIP_DHCP                       0
 #define LWIP_AUTOIP                     0
 #define LWIP_IGMP                       0

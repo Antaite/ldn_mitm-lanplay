@@ -64,11 +64,37 @@ jobs:
             ldn_mitm/ldn_mitm.elf
             overlay/overlay.elf
 
+  tool:
+    name: PC test tool (Windows + Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+
+      - name: Build
+        run: |
+          make -C tools/vswitch vswitch LDFLAGS=-static
+          make -C tools/vswitch windows
+          mkdir -p tool
+          cp tools/vswitch/vswitch.exe tool/
+          cp tools/vswitch/vswitch tool/vswitch-linux-x86_64
+          cp tools/vswitch/使用說明.txt tool/
+
+      - name: Smoke test (Linux)
+        run: tool/vswitch-linux-x86_64 --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vswitch-tool
+          path: tool
+
   release:
     name: Publish release
     # Every push to main (or a v* tag) refreshes the release named after ./VERSION.
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: build
+    needs: [build, tool]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,13 +112,19 @@ jobs:
           pattern: debug-elf_*
           path: elf
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: vswitch-tool
+          path: vswitch-tool
+
       - name: Zip packages
         run: |
+          (cd vswitch-tool && chmod +x vswitch-linux-x86_64 && zip -qr "../dist/虛擬Switch測試工具_v${VER}.zip" .)
           cd dist
           for d in */; do (cd "$d" && zip -qr "../${d%/}.zip" .); done
           ls -la
           # fail loudly if the overlay ever goes missing again
-          for z in *.zip; do unzip -l "$z" | grep -q 'switch/.overlays/ldnmitm_config.ovl' || { echo "overlay missing in $z"; exit 1; }; done
+          for z in ldn_mitm-lanplay_*.zip; do unzip -l "$z" | grep -q 'switch/.overlays/ldnmitm_config.ovl' || { echo "overlay missing in $z"; exit 1; }; done
           # debug symbols for reading Atmosphère crash reports (not needed on the console)
           cd ../elf && for d in */; do (cd "$d" && zip -qr "../../dist/${d%/}.zip" .); done
 
@@ -108,5 +140,7 @@ jobs:
             請下載跟主機大氣層版本相同的那一包，解壓到 SD 卡根目錄後重新開機。
             - `AMS1.12.0_FW23.0.0`：大氣層 1.12.0／系統 23.0.0
             - `AMS1.12.1_FW23.0.1`：大氣層 1.12.1／系統 23.0.1
+
+            `虛擬Switch測試工具_*.zip`：電腦用的連線測試工具（Windows／Linux），用法見裡面的使用說明。
 
             使用說明見 README。

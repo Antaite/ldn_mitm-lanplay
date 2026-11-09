@@ -47,7 +47,7 @@
 #define LWIP_PROVIDE_ERRNO /* provide errno for MSVC pre-2017 */
 #endif
 #else /* _MSC_VER */
-#define LWIP_PROVIDE_ERRNO /* provide errno for non-MSVC */
+#include <errno.h> /* ldn_mitm-lanplay: mingw-w64 has the POSIX codes; lwIP must agree with the CRT */
 #endif /* _MSC_VER */
 
 #ifdef __GNUC__

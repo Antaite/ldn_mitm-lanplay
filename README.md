@@ -18,6 +18,7 @@
 | --- | --- | --- |
 | `ldn_mitm-lanplay_v1.3.7_AMS1.12.0_FW23.0.0` | 1.12.0 | 23.0.0 |
 | `ldn_mitm-lanplay_v1.3.7_AMS1.12.1_FW23.0.1` | 1.12.1 | 23.0.1 |
+| `ldn_mitm-lanplay_v1.3.7_AMS1.12.2_FW23.5.0` | 1.12.2 | 23.5.0 |
 
 - 真系統（sysMMC）和虛擬系統（emuMMC）都能用，從哪個系統開進大氣層就在哪個生效。
 - 請下載**跟主機大氣層版本相同**的那一包。版本號在「設定 → 主機 → 系統更新」，例如 `23.0.1｜AMS 1.12.1｜E`。
@@ -96,13 +97,13 @@ docker compose up -d
 
 ## 編譯
 
-推到 GitHub 後 Actions 會自動用 devkitPro 容器，各用大氣層 1.12.0 和 1.12.1 的函式庫編一次；
+推到 GitHub 後 Actions 會自動用 devkitPro 容器，各用大氣層 1.12.0、1.12.1 和 1.12.2 的函式庫編一次；
 在 Actions 頁面下載 artifact，或推 `v*` 標籤自動建立 Release（兩個 zip）。
 
 本機編譯（需要 Docker）：
 
 ```sh
-AMS=1.12.1 docker compose run --rm devkit
+AMS=1.12.2 docker compose run --rm devkit
 # 產物在 out/sd/
 ```
 
